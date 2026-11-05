@@ -13,7 +13,7 @@ English | [简体中文](README.zh-CN.md)
 *A desktop plugin for Hermes Agent that underlines the words in an assistant reply worth doubting, then explains them on hover*<br>
 *给 Hermes 桌面端里值得怀疑的词加下划线并在悬停时解释*
 
-[![tests](https://img.shields.io/badge/tests-94%20passing-brightgreen?style=flat-square)](#development)
+[![tests](https://img.shields.io/badge/tests-95%20passing-brightgreen?style=flat-square)](#development)
 [![Hermes Desktop](https://img.shields.io/badge/Hermes%20Desktop-%3E%3D0.22.0-5b5bd6?style=flat-square)](https://github.com/NousResearch/hermes-agent)
 [![dependencies](https://img.shields.io/badge/dependencies-none-3c873a?style=flat-square)](#development)
 [![license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
@@ -110,7 +110,7 @@ Hermes Agent 0.22.0 or newer, Desktop app. The plugin is a single runtime ES mod
 ## Development
 
 ```bash
-node --test tests/plugin.test.mjs   # 94 offline tests
+node --test tests/plugin.test.mjs   # 95 offline tests
 hermes plugins validate .           # manifest, capability and desktop-surface checks
 ```
 

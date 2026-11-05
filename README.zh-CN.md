@@ -110,13 +110,13 @@ Hermes Agent 0.22.0 及以上，需要桌面端。插件就是一个运行时 ES
 ## 开发
 
 ```bash
-node --test tests/plugin.test.mjs   # 94 条离线测试
+node --test tests/plugin.test.mjs   # 95 条离线测试
 hermes plugins validate .           # 清单、能力与桌面端接口面检查
 ```
 
 测试把同一份运行时模块加载到替身插件 SDK 和替身 DOM 上跑，不需要装 Hermes。覆盖率没有做插桩：模块是测试时求值加载的，不是 import 进来的，所以这里放覆盖率徽章只会是一个空数字。
 
-[b-tests]: https://img.shields.io/badge/tests-94%20passing-brightgreen?style=flat-square
+[b-tests]: https://img.shields.io/badge/tests-95%20passing-brightgreen?style=flat-square
 [b-hermes]: https://img.shields.io/badge/Hermes%20Desktop-%3E%3D0.22.0-5b5bd6?style=flat-square
 [b-deps]: https://img.shields.io/badge/dependencies-none-3c873a?style=flat-square
 [b-license]: https://img.shields.io/badge/license-MIT-blue?style=flat-square

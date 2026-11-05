@@ -169,7 +169,7 @@ function buildDom(replyText, rangeRect = { top: 10, left: 10, right: 200, bottom
   return { doc, win, assistantEl, mdEl, created, highlights, rectState, textState }
 }
 
-async function loadPlugin({ locale = 'en', tier = 'balanced', replyText = '', taskSlot = 'title_generation', rangeRect, stored = new Map(), legacy = null, i18nEnabled = true } = {}) {
+async function loadPlugin({ locale = 'en', tier = 'balanced', replyText = '', taskSlot = 'title_generation', rangeRect, stored = new Map(), legacy = null, i18nEnabled = true, oneshot = null } = {}) {
   const source = await readFile(ENTRY, 'utf8')
   const body = source
     .replace(/^import .*\n/gm, '')
@@ -206,6 +206,7 @@ async function loadPlugin({ locale = 'en', tier = 'balanced', replyText = '', ta
     request: async (method, params) => {
       requests.push({ method, params })
       if (method === 'llm.oneshot') {
+        if (oneshot) return oneshot(params, requests)
         return {
           text: JSON.stringify({
             terms: [
@@ -468,6 +469,34 @@ test('one reply costs exactly one llm call, and a repeat costs none', async () =
   app.fire('message.complete', { text: REPLY })
   await sleep(450)
   assert.equal(app.requests.filter(req => req.method === 'llm.oneshot').length, 1)
+})
+
+test('模型失败不能把回复记成「没有够格的词」，下次触发照样标得上', async () => {
+  let calls = 0
+  const app = await loadPlugin({
+    replyText: REPLY,
+    oneshot: async () => {
+      calls += 1
+      if (calls <= 2) throw new Error('llm.oneshot timed out')
+      return {
+        text: JSON.stringify({
+          terms: [
+            { term: '量子纠缠退税', kind: 'fabricated', explain: '疑似生造或含义不明', note: '', questions: [] }
+          ]
+        })
+      }
+    }
+  })
+  app.fire('message.complete', { text: REPLY })
+  await sleep(1400)
+  assert.equal(calls, 2, '第一次失败后当场重试一次')
+  assert.ok(![...app.highlights.values()].some(item => item.ranges && item.ranges.length), '两次都失败时不标')
+
+  app.fire('message.complete', { text: REPLY })
+  await sleep(1400)
+  assert.equal(calls, 3, '失败不入缓存，再次触发重新分析')
+  assert.ok([...app.highlights.values()].some(item => item.ranges && item.ranges.length), '成功后要标上')
+  app.dispose()
 })
 
 test('light tier with no candidate spends nothing', async () => {

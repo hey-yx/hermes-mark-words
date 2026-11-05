@@ -29,7 +29,7 @@ import { useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 const ID = 'hermes-mark-words'
-const PLUGIN_VERSION = '0.24.2'
+const PLUGIN_VERSION = '0.24.3'
 // 历史插件 ID。改 ID 会换存储键前缀，旧键里的忽略词、设置在这里各搬一次；缓存键搬过来也会被清掉。
 const LEGACY_IDS = ['hermes-term-helper', 'hermes-glossary']
 
@@ -2206,32 +2206,41 @@ async function analyzeReply(text, sessionId, element) {
     return
   }
 
-  try {
-    const raw = await askModel(source, tier, candidates)
-    for (const item of raw) {
-      const term = item.term.trim()
-      if (term.length < 2) continue
-      if (!isUsableTerm(term, source, item.kind)) continue
-      if (isIgnored(term)) continue
-      const kind = normalizeKind(item.kind)
-      const entry = {
-        term,
-        kind,
-        explain: String(item.explain || '').trim(),
-        note: String(item.note || '').trim(),
-        questions: coerceQuestions(item.questions).slice(0, 2),
-        tier
+  // 模型调用失败（超时、报错）当场重试一次：一次抖动不该让这条回复没标记
+  let answered = false
+  for (let attempt = 0; attempt < 2 && !answered; attempt += 1) {
+    try {
+      const raw = await askModel(source, tier, candidates)
+      answered = true
+      for (const item of raw) {
+        const term = item.term.trim()
+        if (term.length < 2) continue
+        if (!isUsableTerm(term, source, item.kind)) continue
+        if (isIgnored(term)) continue
+        const kind = normalizeKind(item.kind)
+        const entry = {
+          term,
+          kind,
+          explain: String(item.explain || '').trim(),
+          note: String(item.note || '').trim(),
+          questions: coerceQuestions(item.questions).slice(0, 2),
+          tier
+        }
+        terms.push(entry)
       }
-      terms.push(entry)
+    } catch (err) {
+      terms = []
     }
-  } catch (err) {
-    terms = []
   }
 
   const analysis = { terms, replyText: source, sessionId, tier, element: element || null }
-  analyses.set(sig, analysis)
-  if (terms.length) rememberMarks(source, terms)
-  rememberAnalyzedTail(source)
+  // 模型没答上来（两次都失败）不入缓存、不记尾部：那不是「这段回复没有够格的词」。
+  // 缓存成空结果会被后续重渲染一直回放，这条回复就永远没标记，只有手动重扫救得回来
+  if (answered) {
+    analyses.set(sig, analysis)
+    if (terms.length) rememberMarks(source, terms)
+    rememberAnalyzedTail(source)
+  }
   if (terms.length) await applyWithRetry(source, terms, analysis)
 }
 
