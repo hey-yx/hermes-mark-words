@@ -1,0 +1,105 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1200px; height: 760px; background: #141414; overflow: hidden; }
+  body {
+    font-family: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", sans-serif;
+    color: #e9e9ea;
+    padding: 28px 92px 0 92px;
+    display: flex; flex-direction: column;
+  }
+  .row-user { display: flex; justify-content: flex-end; margin-bottom: 26px; }
+  .bubble {
+    max-width: 600px;
+    background: #1d1d1e;
+    border: 1px solid rgba(255,255,255,.07);
+    border-radius: 14px;
+    padding: 13px 17px;
+    font-size: 15.5px;
+    line-height: 1.72;
+    color: #d9d9dc;
+  }
+  .meta { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; color: #7c7c80; font-size: 12.5px; }
+  .meta .chev { font-size: 10px; opacity: .8; }
+  .reply { font-size: 16px; line-height: 2.0; color: #ececed; max-width: 600px; }
+  .reply p { margin-bottom: 2px; }
+  .t-dot {
+    text-decoration: underline dotted rgba(233,233,234,.55);
+    text-decoration-thickness: 1.5px; text-underline-offset: 4px;
+  }
+  .t-wave {
+    text-decoration: underline wavy #e0576a;
+    text-decoration-thickness: 1.5px; text-underline-offset: 4px;
+  }
+  .spacer { flex: 1; }
+  .composer {
+    margin: 0 -30px;
+    border: 1px solid rgba(255,255,255,.09);
+    background: #171718;
+    border-radius: 16px;
+    padding: 16px 18px;
+    display: flex; align-items: center; gap: 12px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.45);
+    margin-bottom: 18px;
+  }
+  .plus { width: 26px; height: 26px; border-radius: 8px; background: rgba(255,255,255,.07); color: #9a9a9f; display: grid; place-items: center; font-size: 16px; }
+  .ph { color: #6f6f75; font-size: 15px; flex: 1; }
+  .chip { font-size: 12.5px; color: #a8a8ae; border: 1px solid rgba(255,255,255,.10); background: rgba(255,255,255,.04); padding: 5px 10px; border-radius: 999px; }
+  .send { width: 30px; height: 30px; border-radius: 50%; background: #e7e7e9; color: #141414; display: grid; place-items: center; font-size: 14px; }
+  .pop {
+    position: absolute;
+    left: 300px; top: 232px;
+    width: 400px;
+    background: #1e1e20;
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 13px;
+    padding: 15px 17px 14px;
+    box-shadow: 0 22px 60px rgba(0,0,0,.6);
+  }
+  .pop-head { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; }
+  .pop-term { font-size: 14.5px; font-weight: 600; letter-spacing: .01em; color: #f2f2f3; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid rgba(224,87,106,.5); color: #ef6f81; }
+  .pop-spacer { flex: 1; }
+  .ignore { font-size: 11.5px; color: #8a8a90; }
+  .pop-body { font-size: 14px; line-height: 1.62; color: #c9c9cd; }
+  .pop-note { margin-top: 8px; font-size: 12px; color: #85858b; }
+  .qs { margin-top: 12px; display: flex; flex-direction: column; gap: 7px; }
+  .q {
+    display: flex; align-items: center; gap: 9px;
+    border: 1px solid rgba(255,255,255,.10);
+    background: rgba(255,255,255,.03);
+    border-radius: 8px; padding: 7px 10px;
+    font-size: 12.8px; color: #c4c4c9;
+  }
+  .q i { width: 16px; height: 16px; border: 1px solid rgba(255,255,255,.24); border-radius: 4px; display: grid; place-items: center; font-size: 9px; color: #9a9aa0; font-style: normal; }
+  .status { display: flex; align-items: center; gap: 14px; padding: 0 4px 12px; font-size: 11.5px; color: #5f5f65; }
+</style></head>
+<body>
+  <div class="row-user">
+    <div class="bubble">Answer in English, five lines max, incident summary style: the queue hit zeroframe between two deploy frames, and quiescegate shed overflow traffic until capacity came back. Do not add any markup or annotation lines.</div>
+  </div>
+
+  <div class="meta"><span>Thought for 4s</span><span class="chev">›</span></div>
+
+  <div class="reply">
+    <p>Queue hit <span class="t-wave">zeroframe</span> between two deploy frames, dropping all in-flight work.</p>
+    <p><span class="t-dot">Quiescegate</span> engaged and <span class="t-dot">shed</span> overflow traffic to protect the remaining capacity.</p>
+    <p>Service degraded briefly; excess requests were rejected rather than queued.</p>
+    <p>Capacity returned after the second deploy frame landed, and the gate released.</p>
+    <p>No data loss observed beyond the shed traffic; queue depth normalized.</p>
+  </div>
+
+
+
+  <div class="spacer"></div>
+
+  <div class="composer">
+    <div class="plus">+</div>
+    <div class="ph">Ask anything</div>
+    <div class="chip">Smart Mix</div>
+    <div class="chip">High</div>
+    <div class="send">↑</div>
+  </div>
+  <div class="status"><span>default</span><span>backend ready</span><span>14.2K tokens</span></div>
+</body></html>
