@@ -1,0 +1,74 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1200px; height: 600px; overflow: hidden; }
+  body {
+    font-family: -apple-system, "Helvetica Neue", "PingFang SC", sans-serif;
+    background: #f6f6f4;
+    color: #1b1b1b;
+    display: flex;
+    align-items: center;
+    padding: 0 72px;
+    gap: 64px;
+  }
+  .left { width: 470px; flex: none; }
+  .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 26px; }
+  .mark { width: 44px; height: 44px; border-radius: 12px; background: #1b1b1b; position: relative; }
+  .mark i { position: absolute; left: 10px; right: 10px; height: 2px; border-radius: 2px; }
+  .mark i.a { bottom: 17px; background: repeating-linear-gradient(90deg,#fff 0 3px,transparent 3px 6px); }
+  .mark i.b { bottom: 11px; background: #e2556a; }
+  h1 { font-size: 54px; line-height: 1.05; letter-spacing: -0.02em; font-weight: 650; }
+  .tag { margin-top: 18px; font-size: 20px; line-height: 1.5; color: #55555c; }
+  .keys { margin-top: 30px; display: flex; gap: 28px; font-size: 14px; color: #6b6b72; }
+  .keys div { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 42px; height: 12px; }
+  .dot.d { border-bottom: 1.5px dotted rgba(64,64,70,.62); }
+  .dot.w { height: 12px; }
+  .card {
+    flex: 1;
+    background: #fff;
+    border: 1px solid rgba(0,0,0,.10);
+    border-radius: 16px;
+    box-shadow: 0 18px 48px rgba(20,20,24,.10);
+    padding: 30px 32px 26px;
+  }
+  .reply { font-size: 21px; line-height: 1.95; color: #24242a; }
+  .t-dot { border-bottom: 1.5px dotted rgba(64,64,70,.62); padding-bottom: 1px; }
+  .t-wave { text-decoration: underline wavy #cf2d56; text-decoration-thickness: 1.5px; text-underline-offset: 4px; }
+  .pop {
+    margin-top: 22px;
+    border: 1px solid rgba(0,0,0,.10);
+    border-radius: 12px;
+    padding: 16px 18px;
+    background: #fbfbfa;
+  }
+  .pop-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .pop-term { font-weight: 650; font-size: 16px; }
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid rgba(207,45,86,.45); color: #b02445; }
+  .pop-body { font-size: 14.5px; line-height: 1.6; color: #3c3c44; }
+  .q { margin-top: 10px; font-size: 14px; color: #55555c; }
+  .q span { display: inline-block; border: 1px solid rgba(0,0,0,.14); border-radius: 7px; padding: 4px 9px; margin-right: 8px; }
+</style></head>
+<body>
+  <div class="left">
+    <div class="brand">
+      <div class="mark"><i class="a"></i><i class="b"></i></div>
+      <div style="font-size:15px;letter-spacing:.14em;color:#7a7a82">HERMES DESKTOP PLUGIN</div>
+    </div>
+    <h1>Mark Words</h1>
+    <div class="tag">Underlines the words in a reply that are worth doubting, and explains them when you hover.</div>
+    <div class="keys">
+      <div><span class="dot d"></span>debatable usage</div>
+      <div><span class="dot w"><svg width="42" height="12" viewBox="0 0 42 12"><path d="M0 8 q3.5 -5 7 0 t7 0 t7 0 t7 0 t7 0 t7 0" fill="none" stroke="#cf2d56" stroke-width="1.6"/></svg></span>suspected invention</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="reply">这段回复里有个 <span class="t-wave">零空帧</span> 的说法，还有一处 <span class="t-dot">熔断降级</span> 的用法值得问。</div>
+    <div class="pop">
+      <div class="pop-head"><span class="pop-term">零空帧</span><span class="badge">Meaning unclear</span></div>
+      <div class="pop-body">上下文看不出它指什么，像是自造的说法，值得追问是哪一层的空帧。</div>
+      <div class="q"><span>空帧的判定标准是什么？</span><span>这个说法有出处吗？</span></div>
+    </div>
+  </div>
+</body></html>

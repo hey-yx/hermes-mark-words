@@ -1,0 +1,56 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1200px; height: 760px; overflow: hidden; }
+  body {
+    font-family: -apple-system, "Helvetica Neue", "PingFang SC", sans-serif;
+    background: #f6f6f4; color: #1b1b1b;
+    padding: 54px 64px;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  .label { font-size: 13px; letter-spacing: .12em; color: #8a8a92; }
+  .card {
+    background: #fff; border: 1px solid rgba(0,0,0,.10); border-radius: 16px;
+    box-shadow: 0 14px 40px rgba(20,20,24,.08); padding: 34px 38px;
+  }
+  .reply { font-size: 22px; line-height: 2.0; color: #24242a; }
+  .t-dot { text-decoration: underline dotted rgba(64,64,70,.62); text-decoration-thickness: 1.5px; text-underline-offset: 4px; }
+  .t-wave { text-decoration: underline wavy #cf2d56; text-decoration-thickness: 1.5px; text-underline-offset: 4px; }
+  .pop { margin-top: 24px; border: 1px solid rgba(0,0,0,.10); border-radius: 12px; padding: 18px 20px; background: #fbfbfa; }
+  .pop-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .pop-term { font-weight: 650; font-size: 17px; }
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid rgba(207,45,86,.45); color: #b02445; }
+  .badge.neutral { border-color: rgba(0,0,0,.18); color: #55555c; }
+  .spacer { flex: 1; }
+  .ignore { font-size: 13px; color: #8a8a92; }
+  .pop-body { font-size: 15px; line-height: 1.65; color: #3c3c44; }
+  .note { margin-top: 8px; font-size: 13px; color: #7a7a82; }
+  .q { margin-top: 14px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .q span { display: inline-flex; align-items: center; gap: 8px; border: 1px solid rgba(0,0,0,.14); border-radius: 8px; padding: 7px 11px; font-size: 14px; color: #3c3c44; }
+  .q i { width: 18px; height: 18px; border: 1px solid rgba(0,0,0,.22); border-radius: 5px; display: inline-block; position: relative; }
+  .q i::after { content: "↓"; position: absolute; inset: 0; font-size: 11px; line-height: 18px; text-align: center; color: #55555c; }
+</style></head>
+<body>
+  <div class="label">MARKS LAND ON THE WORD, NOT NEAR IT</div>
+  <div class="card">
+    <div class="reply">
+      本轮把 <span class="t-wave">零空帧</span> 这个说法记下来，<span class="t-dot">熔断降级</span> 的用法也值得问一句，
+      其余的日常词和标准术语一律不标。代码块、思考块和被打断的回复都不进标注。
+    </div>
+  </div>
+  <div class="label" style="margin-top:10px">HOVER FOR WHAT IT MEANS HERE</div>
+  <div class="card">
+    <div class="pop" style="margin-top:0">
+      <div class="pop-head">
+        <span class="pop-term">零空帧</span>
+        <span class="badge">Meaning unclear</span>
+        <span class="spacer"></span>
+        <span class="ignore">Ignore this word</span>
+      </div>
+      <div class="pop-body">上下文看不出它指什么，像是自造的说法，值得追问是哪一层的空帧。</div>
+      <div class="note">Uncertainty and source: no common usage found</div>
+      <div class="q"><span><i></i>空帧的判定标准是什么？</span><span><i></i>这个说法有出处吗？</span></div>
+    </div>
+  </div>
+</body></html>
