@@ -27,7 +27,7 @@ Every reply arrives with a few words that deserve a second look: a phrase that m
 A reply with nothing doubtful gets no marks at all, and that is the normal outcome.
 
 > [!NOTE]
-> The plugin reads the text of finished assistant replies in the transcript, which is what it needs to place marks on the right words. A reply that carries its own mark directives costs no extra model call; a reply without them costs one batched auxiliary request through Hermes's own `llm.oneshot`. No third-party service, no telemetry, no file reads, no credentials.
+> The plugin reads the text of finished assistant replies in the transcript, which is what it needs to place marks on the right words. A reply that carries its own mark directives costs no extra model call; a reply without them costs one batched auxiliary request through Hermes's own `llm.oneshot`, and that request also carries your last message so the auxiliary model can judge which words are new to you. No third-party service, no telemetry, no file reads, no credentials.
 
 <p align="center">
 <img src="assets/chat-marks.png" alt="A reply with a red wavy mark on a suspected invented word and a dotted mark on a debatable one" width="49%"><img src="assets/chat-popover.png" alt="The popover opened on a marked word, with an explanation and follow-up questions" width="49%">
@@ -68,17 +68,17 @@ The reply can be in any language; the plugin looks in whatever language the repl
 
 Two paths, and the first one costs nothing extra.
 
-**Mark directives in the reply.** When a reply ends with `::hmw{term="…" kind="…" explain="…"}` lines, the plugin reads them from the finished text, keeps the directive lines out of the visible transcript and marks the words immediately. No second request. This is the path the `reply-word-marks` skill asks the model to take.
+**Mark directives in the reply.** When a reply ends with `::hmw{term="…" kind="…" explain="…"}` lines, the plugin reads them from the finished text, keeps the directive lines out of the visible transcript and marks the words immediately. No second request. This is the path the [`reply-word-marks`](skills/reply-word-marks/SKILL.md) skill asks the model to take (copy the folder into `~/.hermes/skills/` to install it).
 
 **One auxiliary analysis.** A reply without directives gets a single batched request through `llm.oneshot`. Never one call per streaming chunk, never a second call for a reply it has already seen.
 
 | Tier | What is scanned | What reaches the model | Words | Follow-ups per word |
 | --- | --- | --- | --- | --- |
-| Light | high-confidence candidates only | the candidate snippets with their surroundings | up to 3 | 1 |
-| Balanced | the whole reply | the reply text | up to 5 | 2 |
-| Detailed | the whole reply | the reply text | up to 10 | 2 |
+| Light | high-confidence candidates only | the candidate snippets with their surroundings, plus your last message | up to 3 | 1 |
+| Balanced | the whole reply | the reply text, plus your last message | up to 5 | 2 |
+| Detailed | the whole reply | the reply text, plus your last message | up to 10 | 2 |
 
-No tier sends the conversation history. Deeper tiers cost more tokens, which is the only difference between them.
+No earlier turns are sent. The last message rides along only so the auxiliary model can judge which words are new to you. Deeper tiers cost more tokens, which is the only difference between them.
 
 ## Hover
 
@@ -97,7 +97,7 @@ Settings → Plugins → Mark Words holds the on/off switch, the scan depth, a l
 ## Privacy and network
 
 - **Network:** one auxiliary model request per reply that carries no mark directives, through Hermes's own `llm.oneshot` and the auxiliary model you have configured. Nothing else leaves the machine.
-- **Reads:** the text of assistant replies in the transcript, which is what the marks are placed on.
+- **Reads:** the text of assistant replies in the transcript (what the marks are placed on) and your last message (context for the auxiliary request only).
 - **Writes:** marks, ignored words and settings in the plugin's own storage. No files, no database, no credentials.
 - **No telemetry** and no self-updater. Updates arrive only through the plugin's repository or the catalog.
 

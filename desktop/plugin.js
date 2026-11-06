@@ -17,7 +17,8 @@
  *   宽松 light     —— 只做本地高置信候选抽取，有高置信候选才问模型；一句话解释 + 最多 1 个追问。
  *   中等 balanced  —— 整段回复（截断 3000 字）交给模型找词；解释 + 不确定性 + 最多 2 个追问。
  *   详细 detailed  —— 整段回复（截断 8000 字）；解释 + 来源提示 + 最多 3 个追问。
- * 三档都不带对话历史：宽松档只送候选词的上下文片段，中等与详细档只送这一段回复。
+ * 三档都不带历史轮次，但每档的辅助请求都附带最后一条用户提问（用来判断哪些词对他生疏）：
+ *   宽松档只送候选词的上下文片段，中等与详细档只送这一段回复。
  *
  * 恢复：解释跟着标记块与标记表走，不留解释缓存；同样的回复文本只分析一次。
  *
@@ -29,7 +30,7 @@ import { useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 const ID = 'hermes-mark-words'
-const PLUGIN_VERSION = '0.24.3'
+const PLUGIN_VERSION = '0.24.4'
 // 历史插件 ID。改 ID 会换存储键前缀，旧键里的忽略词、设置在这里各搬一次；缓存键搬过来也会被清掉。
 const LEGACY_IDS = ['hermes-term-helper', 'hermes-glossary']
 

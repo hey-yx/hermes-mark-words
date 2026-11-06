@@ -2,6 +2,25 @@
 
 Newest first. Versions are 0.x; the plugin is pre-1.0 on purpose.
 
+## v0.24.4
+
+- Disclosure fix from catalog review: the auxiliary `llm.oneshot` request
+  carries the reply text together with the last user message (so the auxiliary
+  model can judge which words are new to this reader), not only the reply. The
+  manifest description and both READMEs now say so, including the per-tier
+  table and the privacy section.
+- The `reply-word-marks` skill the READMEs cite now ships in the repo under
+  `skills/reply-word-marks/`, so the in-band directive path is installable
+  from the checkout.
+
+## v0.24.3
+
+- The auxiliary analysis call now retries once when it fails (timeout or
+  error), so a single network blip no longer leaves a reply unmarked.
+- A failed run is no longer cached as "this reply has no marks": the empty
+  result is not stored, so the reply is re-scanned later instead of staying
+  bare forever.
+
 ## v0.24.2
 
 - Disabling the plugin now restores the page completely. Marks, the overlay
@@ -162,7 +181,7 @@ Newest first. Versions are 0.x; the plugin is pre-1.0 on purpose.
 ## v0.13.0
 
 - Performance and statistics terms (`p50`/`p90`/`p95`/`p99`, `TTFB`, `QPS`, `RTT`,
-  首字延迟、中位数、尾延迟、分位值 …) are marked in every tier: the model is told
+  首字延迟, 中位数, 尾延迟, 分位值 …) are marked in every tier: the model is told
   about them explicitly, and Light picks them up from candidates first, so they
   are never crowded out inside its short candidate list. (Superseded in 0.16.0:
   marks are now reserved for words with genuine doubt, so settled metrics like
