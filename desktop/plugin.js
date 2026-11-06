@@ -2,30 +2,22 @@
  * hermes-mark-words — 给助手回复里有疑点的词加标记，悬停弹出解释与追问
  *
  * 做什么：
- *   1. 一轮回复结束后（message.complete）取这段回复的正文，只挑「读者会存疑」的词：
- *      疑似生造、含义不明、用法有歧义、或被作者自创的说法。基础词与含义明确的标准术语不标。
- *      回复是哪种语言就按哪种语言找，不限于中文或英文。
- *   2. 标记关系优先来自回复本身：主模型在末尾输出 ::hmw 指令行（正文里不显示），
- *      插件直接按它标注，不发第二次请求；回复没带标记块时才用辅助模型（llm.oneshot）批量解释。
+ *   1. 标记关系只来自回复本身：主模型在回复末尾输出 ::hmw 指令行（正文里不显示），
+ *      插件从 message.complete 的原始文本里解析它，直接标注。
+ *   2. 插件自己不跑模型、不发请求。回复没带标记块，就是没有标记，什么都不补。
+ *      这条规则由随包附带的 reply-word-marks skill 保证：skill 教主模型怎么写标记块。
  *   3. 在正文里给这些词加细下划线：普通疑点走中性点线，疑似生造与含义不明走细红波浪线。
  *   4. 鼠标移上去弹 popover：解释 + 不确定性与来源提示 + 能直接问出口的具体问题；
  *      每个问题带一个图标按钮，点一下把问题填进输入框（只填不发）。
  *   5. 每条回复的标记关系另存一份（markStore）：页面重渲染、切换会话、重载插件之后，
- *      旧回复的标记也能按文字重新钉回去，不依赖模型重跑。
+ *      旧回复的标记也能按文字重新钉回去。
  *
- * 三档（设置页切换），差别在「扫多少」和「解释多深」，也就是 token 花在哪：
- *   宽松 light     —— 只做本地高置信候选抽取，有高置信候选才问模型；一句话解释 + 最多 1 个追问。
- *   中等 balanced  —— 整段回复（截断 3000 字）交给模型找词；解释 + 不确定性 + 最多 2 个追问。
- *   详细 detailed  —— 整段回复（截断 8000 字）；解释 + 来源提示 + 最多 3 个追问。
- * 三档都不带历史轮次，但每档的辅助请求都附带最后一条用户提问（用来判断哪些词对他生疏）：
- *   宽松档只送候选词的上下文片段，中等与详细档只送这一段回复。
- *
- * 恢复：解释跟着标记块与标记表走，不留解释缓存；同样的回复文本只分析一次。
- *
- * 安装：~/.hermes/desktop-plugins/hermes-mark-words/plugin.js（目录名 == id）
+ * 安装：整个包放进 ~/.hermes/plugins/hermes-mark-words/（目录名 == id），
+ * 桌面端会把 desktop/plugin.js 复制到 ~/.hermes/desktop-plugins/ 下加载；
+ * skills/reply-word-marks/ 由插件注册成 hermes-mark-words:reply-word-marks。
  */
 
-import { Button, host, PALETTE_AREA, SegmentedControl, ToggleRow, TRANSCRIPT_DIRECTIVE_AREA, usePluginI18n } from '@hermes/plugin-sdk'
+import { Button, host, PALETTE_AREA, ToggleRow, TRANSCRIPT_DIRECTIVE_AREA, usePluginI18n } from '@hermes/plugin-sdk'
 import { useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
@@ -37,31 +29,12 @@ const LEGACY_IDS = ['hermes-term-helper', 'hermes-glossary']
 // 渲染进程里的全局对象：Electron 主世界里 window 与 globalThis 同源，取不到时退回 globalThis
 const win = typeof window !== 'undefined' ? window : globalThis
 
-// ─── 档位 ────────────────────────────────────────────────────────────────
-// scan：本地候选（light）还是整段交给模型（balanced / detailed）
-// maxChars：整段扫描时送进模型的字数上限
-// maxTerms：最多要几个词
-// questions：每个词最多几个追问（0 到 2 个，没有合适的就不给）
-const TIERS = {
-  light: { labelKey: 'tierLight', scan: 'local', maxTerms: 3, questions: 1, maxTokens: 600, contextChars: 260 },
-  balanced: { labelKey: 'tierBalanced', scan: 'full', maxTerms: 5, questions: 2, maxTokens: 1200, contextChars: 400 },
-  detailed: { labelKey: 'tierDetailed', scan: 'full', maxTerms: 10, questions: 2, maxTokens: 2200, contextChars: 700 }
-}
-const TIER_IDS = ['light', 'balanced', 'detailed']
-
-// 辅助任务槽：决定术语解释走哪套模型配置。默认 title_generation
-// （网关自己的默认槽，指到便宜的 flash 模型）；设置页不暴露此项，默认槽行为恒定。
-const TASK_SLOTS = ['title_generation', 'compression', 'memory_query_rewrite', 'skills_hub', 'curator', 'mcp']
-
-const SETTINGS_DEFAULT = { enabled: true, tier: 'balanced', taskSlot: 'title_generation' }
+const SETTINGS_DEFAULT = { enabled: true }
 // 用户点「忽略」的词：不再标注；设置页可查看和移除
 let ignoredTerms = []
-const MIN_REPLY_CHARS = 40
 // 流式输出时文字一直在变，等它安静一会儿再判断「这条回复写完了」
 const STREAM_SETTLE_MS = 700
 const POLL_MS = 450
-// 只用于合并同一时刻到达的多条辅助分析请求；带 ::hmw 的回复不过这道防抖
-const ANALYZE_DEBOUNCE_MS = 150
 const DOM_RETRY_MS = 250
 const DOM_RETRY_LIMIT = 8
 
@@ -95,14 +68,8 @@ const HL_ID = 'hermes-mark-words-hl'
 const LOCALES = {
   en: {
     title: 'Mark Words',
-    analysisLocale: 'en',
     enabledLabel: 'Enable term marking',
     enabledHint: 'Underline the words in assistant replies that are worth doubting; hover for an explanation and ready-to-ask follow-ups.',
-    tierLabel: 'Scan depth',
-    tierHint: 'Light only checks high-confidence candidates. Balanced and Detailed scan the whole reply. Deeper tiers cost more tokens.',
-    tierLight: 'Light',
-    tierBalanced: 'Balanced',
-    tierDetailed: 'Detailed',
     kindTerm: 'Term',
     kindAbbrev: 'Abbreviation',
     kindFabricated: 'Possibly invented',
@@ -128,14 +95,8 @@ const LOCALES = {
   },
   zh: {
     title: '标词助手',
-    analysisLocale: 'zh',
     enabledLabel: '启用术语标注',
     enabledHint: '给助手回复里有疑点的词加下划线，悬停弹出解释和能直接问出口的追问。',
-    tierLabel: '扫描深度',
-    tierHint: '宽松档只查高置信候选；中等与详细档整段扫描。档位越深，token 花得越多。',
-    tierLight: '宽松',
-    tierBalanced: '中等',
-    tierDetailed: '详细',
     kindTerm: '术语',
     kindAbbrev: '缩写',
     kindFabricated: '疑似生造',
@@ -312,60 +273,11 @@ function rangeMatchesText(range, needle) {
   }
 }
 
-// ─── 本地候选抽取（宽松档用，零 token）───────────────────────────────
-// 候选按 rank 排序：轻档只留 maxTerms 个，性能指标必须先保住
-const CANDIDATE_PATTERNS = [
-  { re: /(?<![a-z0-9.\/-])[A-Za-z]{1,4}[0-9]{1,3}(?![a-z0-9.\/-])/g, pick: 0, rank: 0 },
-  { re: /(首字延迟|首字中位|首字时间|首字耗时|中位数|长尾延迟|尾延迟|分位值|分位数|时延|抖动|长尾|吞吐量|压力测试|基准测试|压测)/g, pick: 1, rank: 1 },
-  { re: /\b[A-Z]{2,6}(?![A-Za-z])/g, pick: 0, rank: 2 },
-  { re: /\b[a-z]+(?:_[a-z0-9]+)+\b/g, pick: 0, rank: 3 },
-  { re: /\b[a-z]+[A-Z][A-Za-z0-9]*\b/g, pick: 0, rank: 4 },
-  { re: /[《「【“"']([^》」】”"']{2,24})[》」】”"']/g, pick: 1, rank: 5 },
-  { re: /([\u4e00-\u9fffA-Za-z0-9]{2,14})[（(][^)）]{2,40}[)）]/g, pick: 1, rank: 6 }
-]
-
-const CJK_DOMAIN_SUFFIX =
-  /(?:率|制|型|险|费|税|证|卡|码|系统|平台|机制|政策|流程|标准|指标|口径|阈值|算法|模型|架构|协议|接口|组件|服务|集群|缓存|索引|事务|队列|消息|日志|链路|迁移|备份|病|症|术|药|疗|保|定额|比例|备案|转诊|门诊|住院|结算|起付|封顶)/
-
-function localCandidates(text) {
-  // 按 rank 记录首次命中：rank 小的排前面，轻档截断时先保住性能指标
-  const ranked = new Map()
-  const source = String(text || '')
-  for (const { re, pick, rank = 9 } of CANDIDATE_PATTERNS) {
-    const matcher = new RegExp(re.source, re.flags)
-    let match = matcher.exec(source)
-    while (match) {
-      const value = (match[pick] || '').trim()
-      if (value && value.length >= 2 && value.length <= 24 && !ranked.has(value)) ranked.set(value, rank)
-      match = matcher.exec(source)
-    }
-  }
-  // 中文领域词只做粗筛，真假交给模型判断
-  const suffixMatcher = new RegExp(`[\\u4e00-\\u9fff]{2,8}${CJK_DOMAIN_SUFFIX.source}`, 'g')
-  let suffixMatch = suffixMatcher.exec(source)
-  while (suffixMatch) {
-    const value = suffixMatch[0].trim()
-    if (value.length >= 3 && value.length <= 12 && !ranked.has(value)) ranked.set(value, 8)
-    suffixMatch = suffixMatcher.exec(source)
-  }
-  return [...ranked.entries()].sort((a, b) => a[1] - b[1]).map(([value]) => value)
-}
-
-// 取术语周围的一段语境，用作提示词上下文
-function contextAround(text, term, span) {
-  const source = String(text || '')
-  const at = source.indexOf(term)
-  if (at === -1) return ''
-  const half = Math.floor(span / 2)
-  const start = Math.max(0, at - half)
-  const end = Math.min(source.length, at + term.length + half)
-  return source.slice(start, end).trim()
-}
-
 // ─── 回复自带的标记块（单请求标注）─────────────────────────────────────
 // 主模型在回复末尾按约定输出 `::hmw{term="…", kind="…", explain="…", q1="…"}` 指令行，
 // 桌面端 transcript.directives 通道把指令行渲染成空组件，标记关系不进正文显示。
-// 插件从 message.complete 的原始 markdown 里解析标记关系，直接标注，不再发第二次模型请求。
+// 插件从 message.complete 的原始文本里解析标记关系，直接标注。没有标记块就没有标记，
+// 插件不发模型请求、不补分析。
 const MARK_DIRECTIVE = 'hmw'
 // 与桌面端解析口径一致：名字 [a-z][a-z0-9-]{0,63}，attrs 段不能含花括号、最长 2048
 const DIRECTIVE_LINE_RE = '(?<=^|\\s)::([a-z][a-z0-9-]{0,63})(?:\\{([^{}]{0,2048})\\})?'
@@ -441,11 +353,6 @@ function guessLocale() {
   }
 }
 let ctxI18nT = (key, ...args) => localTranslate(guessLocale(), key, ...args)
-
-// 解释用哪种语言：跟应用语言走，不看回复本身是中文还是英文
-function analysisLocale() {
-  return ctxI18nT('analysisLocale') === 'zh' ? 'zh' : 'en'
-}
 
 // ─── 宿主作用域计时器 ───────────────────────────────────────────────────
 // ctx.setTimeout / ctx.setInterval 由宿主在卸载时自动清；旧宿主没有这两件时
@@ -676,60 +583,6 @@ function storedMarksFor(text) {
 }
 
 
-// ─── 模型调用 ────────────────────────────────────────────────────────────
-const SYSTEM_PROMPT =
-  '你是术语标注助手。阅读下面一段助手回复，只挑「读者会存疑」的词：疑似生造或不存在的说法、含义不明或有歧义的词、用法不标准或值得商榷的概念。\n' +
-  '宁缺毋滥：日常口语、常识词、广为人知的概念（浏览器、下载、缓存、接口、API、数据库）一律不标；常规工程词（加载、路由、同步、备份、日志、部署、监控这类）和含义明确、行业通行的标准术语也不标，哪怕它技术性很强；文件路径、网址、命令、代码标识符、版本号、纯数字不标。\n' +
-  '一段回复通常只有 0 到 3 个够格的词；一个都没有就输出空数组，绝不凑数。回复用哪种语言写，就按哪种语言挑：中文、英文、日文、韩文或其他文字都一样对待，不要因为不是中文或英文就跳过。\n' +
-  '只输出 JSON，格式：{"terms":[{"term":"原文里的连续片段","kind":"fabricated|unclear|term","explain":"一句话说明它在这段上下文里指什么、疑点在哪，60 字以内","note":"不确定程度与判断依据；没有就写空字符串","questions":["能直接问出口的具体问题，0 到 2 个，没有合适的就给空数组"]}]}\n' +
-  '规则：\n' +
-  '1. term 必须逐字出现在原文里（含大小写），不要改写、不要翻译、不要重复；可以是任意语言的词。\n' +
-  '2. kind：疑似编造或不存在的说法用 fabricated；含义不明、或在此处有歧义用 unclear；既有词但用法不标准、值得商榷用 term。\n' +
-  '3. explain 必须回答「这个词在这段话里指什么、是干嘛用的、跟读者有什么关系」，就着上下文说，不要写百科式定义；含义真判断不出来就明说「从上下文看不出它指什么」再讲哪里可疑，不要硬编一个定义。\n' +
-  '4. questions 必须针对这个词在这段内容里的疑点，能落地核实（例如「这个说法出自哪份文件」「这两个口径哪个算数」）；禁止「这是什么意思」这类空问。0 到 2 个就够，没有合适的就不给，不要凑数。\n' +
-  '5. questions 必须是纯字符串数组（如 ["问题一"] 或 []），不要写成对象、不要把数组再转义成字符串；explain 和 note 必须是普通字符串。\n'
-
-function modelInstructions() {
-  const language = analysisLocale() === 'zh' ? '中文' : 'English'
-  return (
-    SYSTEM_PROMPT +
-    '\n挑词口径：只标有疑点、值得追问的词，不是列术语表。正文里已经讲清楚的词不要再标。结合最后一条用户提问判断哪些说法对这位用户值得挑刺：他问到的、他表现出不熟或有疑问的概念优先。' +
-    `\nExplanation language: ${language}. explain、note 和 questions 一律用这个语言写，不管回复本身是什么语言。term 必须与原文逐字一致。`
-  )
-}
-
-// 最后一条用户提问：辅助模型靠它判断哪些词对这位用户生疏
-function lastUserMessage() {
-  try {
-    const nodes = document.querySelectorAll('[data-role="user"]')
-    if (!nodes || !nodes.length) return ''
-    return normalizeText(nodes[nodes.length - 1].textContent || '').slice(-400)
-  } catch (err) {
-    return ''
-  }
-}
-
-function buildUserInput(text, tier, candidates) {
-  const config = TIERS[tier] || TIERS.balanced
-  const lines = []
-  const asked = lastUserMessage()
-  if (asked) {
-    lines.push('最后一条用户提问（用来判断哪些词对他生疏）：')
-    lines.push(asked)
-  }
-  if (config.scan === 'full') {
-    lines.push('助手回复：')
-    lines.push(String(text || ''))
-  } else {
-    lines.push('助手回复中的候选词与它们的上下文：')
-    for (const candidate of candidates) {
-      lines.push(`- ${candidate}：「${contextAround(text, candidate, config.contextChars)}」`)
-    }
-  }
-  lines.push(`最多输出 ${config.maxTerms} 个词，每个词最多给 ${config.questions} 个追问，没有合适的就不给；没有够格的词就输出空数组，不要凑数。`)
-  return lines.join('\n')
-}
-
 // 模型偶尔把 questions 写成字符串，或写成被引号包起来的 JSON 数组，都归一成字符串数组
 function coerceQuestions(value) {
   if (Array.isArray(value)) {
@@ -758,123 +611,6 @@ function coerceQuestions(value) {
       .filter(Boolean)
   }
   return []
-}
-
-// 从一段乱 JSON 里逐个抠出 terms 数组的元素（模型偶尔在个别词上写坏引号或括号）
-function salvageTerms(body) {
-  const marker = body.indexOf('"terms"')
-  if (marker === -1) return []
-  const arrayStart = body.indexOf('[', marker)
-  if (arrayStart === -1) return []
-  const out = []
-  let depth = 0
-  let inString = false
-  let escaped = false
-  let elementStart = -1
-  for (let i = arrayStart; i < body.length; i += 1) {
-    const ch = body[i]
-    if (inString) {
-      if (escaped) escaped = false
-      else if (ch === '\\') escaped = true
-      else if (ch === '"') inString = false
-      continue
-    }
-    if (ch === '"') {
-      inString = true
-      continue
-    }
-    if (ch === '{') {
-      if (depth === 0) elementStart = i
-      depth += 1
-      continue
-    }
-    if (ch === '}') {
-      depth -= 1
-      if (depth === 0 && elementStart >= 0) {
-        const chunk = body.slice(elementStart, i + 1)
-        const term = /"term"\s*:\s*"([^"]+)"/.exec(chunk)
-        if (term) {
-          const explain = /"explain"\s*:\s*"([^"]*)"/.exec(chunk)
-          const note = /"note"\s*:\s*"([^"]*)"/.exec(chunk)
-          const kind = /"kind"\s*:\s*"([^"]*)"/.exec(chunk)
-          const questions = /"questions"\s*:\s*(\[[^\]]*\]|"[^"]*")/.exec(chunk)
-          let parsedQuestions = []
-          if (questions) {
-            try {
-              parsedQuestions = coerceQuestions(JSON.parse(questions[1]))
-            } catch (err) {
-              parsedQuestions = coerceQuestions(questions[1])
-            }
-          }
-          out.push({
-            term: term[1],
-            kind: kind ? kind[1] : 'term',
-            explain: explain ? explain[1] : '',
-            note: note ? note[1] : '',
-            questions: parsedQuestions
-          })
-        }
-        elementStart = -1
-      }
-      continue
-    }
-    if (ch === ']' && depth === 0) break
-  }
-  return out
-}
-
-function parseModelJson(raw) {
-  const text = String(raw || '').trim()
-  if (!text) return []
-  let body = text
-  if (body.startsWith('```')) {
-    body = body.replace(/^```[a-zA-Z]*\n?/, '').replace(/```$/, '').trim()
-  }
-  const start = body.indexOf('{')
-  const end = body.lastIndexOf('}')
-  if (start !== -1 && end !== -1 && end > start) {
-    try {
-      const parsed = JSON.parse(body.slice(start, end + 1))
-      const terms = parsed && Array.isArray(parsed.terms) ? parsed.terms : []
-      const clean = terms.filter(item => item && typeof item.term === 'string' && item.term.trim())
-      if (clean.length) {
-        return clean.map(item => ({
-          term: item.term.trim(),
-          kind: item.kind,
-          explain: item.explain,
-          note: item.note,
-          questions: coerceQuestions(item.questions)
-        }))
-      }
-    } catch (err) {
-      // 整体解析失败：逐个词抢救
-      const salvaged = salvageTerms(body.slice(start))
-      if (salvaged.length) return salvaged
-      return []
-    }
-  }
-  // 顶层直接是数组
-  const arrayStart = body.indexOf('[')
-  const arrayEnd = body.lastIndexOf(']')
-  if (arrayStart !== -1 && arrayEnd > arrayStart) {
-    try {
-      const parsed = JSON.parse(body.slice(arrayStart, arrayEnd + 1))
-      if (Array.isArray(parsed)) {
-        return parsed
-          .filter(item => item && typeof item.term === 'string' && item.term.trim())
-          .map(item => ({
-            term: item.term.trim(),
-            kind: item.kind,
-            explain: item.explain,
-            note: item.note,
-            questions: coerceQuestions(item.questions)
-          }))
-      }
-    } catch (err) {
-      // 继续走抢救逻辑
-    }
-  }
-  return salvageTerms(body)
 }
 
 // 模型回的词要过三道闸：原文里真的逐字出现、不是路径/代码片段、不是无意义短串。
@@ -965,18 +701,6 @@ function normalizeKind(kind) {
 // 标记的显示类型：fabricated/unclear 画红波浪线（怀疑），其余画中性点线（既有词）
 function markKind(item) {
   return (item.kind === 'fabricated' || item.kind === 'unclear') ? 'suspect' : 'term'
-}
-
-async function askModel(text, tier, candidates) {
-  const config = TIERS[tier] || TIERS.balanced
-  const result = await host.request('llm.oneshot', {
-    instructions: modelInstructions(),
-    input: buildUserInput(text, tier, candidates),
-    task: settings.taskSlot,
-    max_tokens: config.maxTokens,
-    temperature: 0.2
-  }, 45000)
-  return parseModelJson(result && result.text)
 }
 
 // ─── 高亮 ────────────────────────────────────────────────────────────────
@@ -1577,15 +1301,10 @@ const elementRanges = new Map()
 const appliedState = new Map()
 // 已经见过的回复元素，避免重复读文本
 const knownElements = new WeakSet()
-// 已经用原始文本分析过的回复尾部，用来避免 DOM 路径重复花钱
-const analyzedTails = []
-const pending = []
-let debounceTimer = 0
 let observer = null
 let domTimer = 0
 let pollTimer = 0
 let reanchorRetryTimer = 0
-let inFlight = false
 
 // 插件自己写进页面的节点：观察器要跳过，否则会自激。
 // popover 每次换内容都会产生一批文本节点，旧写法只认元素本身，
@@ -1739,7 +1458,7 @@ function detectNewReplies() {
     const root = markdownRoot(element)
     if (!root) continue
     const text = plainText(root)
-    if (!text.trim() || text.trim().length < MIN_REPLY_CHARS) continue
+    if (!text.trim()) continue
     const state = replyStability.get(element)
     if (!state || state.text !== text) {
       // 文字还在变（流式输出）：先记下来，等它安静下来再说
@@ -1753,7 +1472,7 @@ function detectNewReplies() {
     if (seenReplyTexts.has(sig)) continue
     seenReplyTexts.add(sig)
     // 回复自带标记块：解析指令是纯本地计算，当场标注，一次模型调用都不发。
-    // 网关事件没送到、或者送到之前 DOM 兜底先醒了，都不会再花辅助模型的钱。
+    // 网关事件没送到、或者送到之前 DOM 兜底先醒了，标注照样生效，且一个请求都不发。
     // 注意：text 是抹掉指令行的索引文本，原始指令行要从 textContent 里解析
     const inband = parseMarkDirectives(String((root && root.textContent) || ''))
     if (inband.length) {
@@ -1770,29 +1489,18 @@ function detectNewReplies() {
     const remembered = storedMarksFor(text)
     if (remembered && remembered.length) {
       const analysis = {
-        terms: remembered.map(item => ({ ...item, tier: settings.tier })),
+        terms: remembered.map(item => ({ ...item })),
         replyText: stripMarkDirectives(text),
         sessionId: null,
-        tier: settings.tier,
         element
       }
       analyses.set(sig, analysis)
       void applyWithRetry(text, analysis.terms, analysis)
       continue
     }
-    // 网关事件已经用原始文本分析过同一条回复，就不要再花钱分析一次
-    if (alreadyAnalyzedByEvent(text)) continue
-    diag('analyzed.dom', { chars: text.length, tier: settings.tier })
+    // 剩下的只走标记表重挂：没带标记块、没记忆的回复不补分析（插件不发模型请求）
     void analyzeReply(text, null, element)
   }
-}
-
-// 网关事件（message.complete）拿到的文本和页面上渲染出来的文本不完全一样，
-// 但尾部通常一致，用尾部判断「这条回复已经花过钱」。
-function alreadyAnalyzedByEvent(text) {
-  const tail = tailAnchor(text)
-  if (!tail) return false
-  return analyzedTails.some(item => item && (tail.includes(item) || item.includes(tail)))
 }
 
 // 注册时把页面上已有的回复记下来，避免一上来就把历史回复全分析一遍
@@ -1917,10 +1625,9 @@ function analysisFromStoredMarks(element, sessionId) {
   const terms = storedMarksFor(text)
   if (!terms || !terms.length) return null
   return {
-    terms: terms.map(item => ({ ...item, tier: settings.tier })),
+    terms: terms.map(item => ({ ...item })),
     replyText: text,
     sessionId: sessionId || null,
-    tier: settings.tier,
     element: null
   }
 }
@@ -2141,7 +1848,6 @@ function applyAnalysis(element, analysis) {
     }
     storage.set('lastRun', {
       at: Date.now(),
-      tier: analysis.tier,
       matched: entries.length,
       terms: entries.map(item => item.entry.term).slice(0, 12),
       // 排障用：主题、原生高亮是否可用、浏览器里登记了几个高亮范围
@@ -2154,7 +1860,6 @@ function applyAnalysis(element, analysis) {
     // 短探针：压缩存储里长 JSON 读不出布尔值，这里单独存一条短串方便回读
     storage.set('probe', 'anchored=' + (anchored ? 1 : 0) + ' registered=' + (registered ? registered.size : 0) + ' ig=' + ignoredTerms.length + ' mig=' + migratedKeys)
     diag('marked', {
-      tier: analysis.tier,
       matched: entries.length,
       terms: entries.map(item => `${item.entry.term}:${item.entry.kind}`)
     })
@@ -2164,99 +1869,39 @@ function applyAnalysis(element, analysis) {
 async function analyzeReply(text, sessionId, element) {
   const raw = String(text || '')
   const source = stripMarkDirectives(raw)
-  if (source.trim().length < MIN_REPLY_CHARS) return
-  // 任何路径拿到带标记块的回复都就地解析标注，辅助模型一次都不发
+  // 带标记块：就地解析标注
   const inband = parseMarkDirectives(raw)
   if (inband.length) {
     await applyInband(inband, source, sessionId, element)
     return
   }
-  const tier = settings.tier
-  const config = TIERS[tier] || TIERS.balanced
   const sig = hashString(normalizeText(source))
-  // 同一段回复只分析一次：重渲染、会话重载、重复消息都不再花 token
+  // 同一段回复在进程里已经标过：复用结论重挂
   const previous = analyses.get(sig)
   if (previous) {
     if (element && !previous.element) previous.element = element
     await applyWithRetry(previous.replyText, previous.terms, previous)
     return
   }
-  // 这段正文以前标过：直接按记忆重标，不等模型。
+  // 这段正文以前标过：按标记表重标。
   // 插件重载后打开旧会话、DOM 兜底重新发现历史回复，走的都是这一条
   const remembered = storedMarksFor(source)
   if (remembered && remembered.length) {
     const analysis = {
-      terms: remembered.map(item => ({ ...item, tier })),
+      terms: remembered.map(item => ({ ...item })),
       replyText: source,
       sessionId,
-      tier,
       element: element || null
     }
     analyses.set(sig, analysis)
     await applyWithRetry(source, analysis.terms, analysis)
-    return
   }
-
-  let terms = []
-  const candidates = config.scan === 'local'
-    ? localCandidates(source).slice(0, config.maxTerms)
-    : []
-
-  if (config.scan === 'local' && !candidates.length) {
-    // 没有本地候选：一次模型调用都不发
-    return
-  }
-
-  // 模型调用失败（超时、报错）当场重试一次：一次抖动不该让这条回复没标记
-  let answered = false
-  for (let attempt = 0; attempt < 2 && !answered; attempt += 1) {
-    try {
-      const raw = await askModel(source, tier, candidates)
-      answered = true
-      for (const item of raw) {
-        const term = item.term.trim()
-        if (term.length < 2) continue
-        if (!isUsableTerm(term, source, item.kind)) continue
-        if (isIgnored(term)) continue
-        const kind = normalizeKind(item.kind)
-        const entry = {
-          term,
-          kind,
-          explain: String(item.explain || '').trim(),
-          note: String(item.note || '').trim(),
-          questions: coerceQuestions(item.questions).slice(0, 2),
-          tier
-        }
-        terms.push(entry)
-      }
-    } catch (err) {
-      terms = []
-    }
-  }
-
-  const analysis = { terms, replyText: source, sessionId, tier, element: element || null }
-  // 模型没答上来（两次都失败）不入缓存、不记尾部：那不是「这段回复没有够格的词」。
-  // 缓存成空结果会被后续重渲染一直回放，这条回复就永远没标记，只有手动重扫救得回来
-  if (answered) {
-    analyses.set(sig, analysis)
-    if (terms.length) rememberMarks(source, terms)
-    rememberAnalyzedTail(source)
-  }
-  if (terms.length) await applyWithRetry(source, terms, analysis)
-}
-
-// 记下这条回复的尾部，后面 DOM 路径碰到同一段就不用再发模型请求
-function rememberAnalyzedTail(source) {
-  const tail = tailAnchor(String(source || ''))
-  if (!tail) return
-  analyzedTails.push(tail)
-  if (analyzedTails.length > 40) analyzedTails.shift()
+  // 没带标记块、标记表里也没有：就是没有标记。
+  // 插件不发任何模型请求，「没标记」是正常结果，不补不猜。
 }
 
 // 回复自带标记关系：过术语闸门后直接标注，一次模型调用都不发
 async function applyInband(entries, source, sessionId, element) {
-  const tier = settings.tier
-  const config = TIERS[tier] || TIERS.balanced
   // 与 DOM 兜底、标记表共用同一个签名口径：正文一律抹掉指令行再入账
   source = stripMarkDirectives(String(source || ''))
   const terms = []
@@ -2270,16 +1915,14 @@ async function applyInband(entries, source, sessionId, element) {
       kind: normalizeKind(item.kind),
       explain: String(item.explain || '').trim(),
       note: String(item.note || '').trim(),
-      questions: coerceQuestions(item.questions).slice(0, 2),
-      tier
+      questions: coerceQuestions(item.questions).slice(0, 2)
     }
     terms.push(entry)
   }
   const sig = hashString(normalizeText(source))
-  const analysis = { terms, replyText: source, sessionId, tier, element: element || null }
+  const analysis = { terms, replyText: source, sessionId, element: element || null }
   analyses.set(sig, analysis)
   if (terms.length) rememberMarks(source, terms)
-  rememberAnalyzedTail(source)
   if (terms.length) await applyWithRetry(source, terms, analysis)
 }
 
@@ -2295,8 +1938,6 @@ function remountAllMarks() {
     if (!root) continue
     const text = plainText(root)
     if (!text.trim()) continue
-    // 注意：不套 MIN_REPLY_CHARS。短回复只要在标记表里有过标记，就应该原样挂回来；
-    // 那道闸只管「要不要花钱分析新的回复」
     const sig = hashString(normalizeText(stripMarkDirectives(text)))
     const prior = analyses.get(sig)
     if (prior) {
@@ -2318,12 +1959,11 @@ function remountAllMarks() {
         kind: item.kind,
         explain: item.explain,
         note: item.note,
-        questions: item.questions,
-        tier: settings.tier
+        questions: item.questions
       })
     }
     if (!terms.length) continue
-    const analysis = { terms, replyText: text, sessionId: null, tier: settings.tier, element }
+    const analysis = { terms, replyText: text, sessionId: null, element }
     // 入账：之后 DOM 重渲染时，重锚能顺着这条记录找回这条回复
     analyses.set(sig, analysis)
     applyAnalysis(element, analysis)
@@ -2382,20 +2022,15 @@ function onMessageComplete(event) {
   // 回复自带标记块：解析指令行是纯本地计算，当场标注，
   // 不进防抖队列、也不排在别的模型请求后面（那正是「生成完要等一会」的来源之一）
   const inband = parseMarkDirectives(text)
-  if (inband.length) {
-    const cleaned = stripMarkDirectives(text)
-    const resolved = resolveRenderedReply(cleaned)
-    diag('message.complete.inband', { sessionId, entries: inband.length })
-    void applyInband(inband, resolved ? resolved.text : cleaned, sessionId, resolved ? resolved.element : null)
+  if (!inband.length) {
+    // 没带标记块：这条回复就是没有标记。插件不补分析、不发模型请求。
+    diag('message.complete.no-markers', { sessionId, chars: text.length })
     return
   }
-  pending.push({ sessionId, text })
-  cancelTimer(debounceTimer)
-  debounceTimer = later(() => {
-    debounceTimer = 0
-    const queue = pending.splice(0, pending.length)
-    void drain(queue)
-  }, ANALYZE_DEBOUNCE_MS)
+  const cleaned = stripMarkDirectives(text)
+  const resolved = resolveRenderedReply(cleaned)
+  diag('message.complete.inband', { sessionId, entries: inband.length })
+  void applyInband(inband, resolved ? resolved.text : cleaned, sessionId, resolved ? resolved.element : null)
 }
 
 // 网关事件的文本是原始 markdown，页面上是渲染文本。两边对不上的话，
@@ -2411,42 +2046,7 @@ function resolveRenderedReply(rawText) {
   return { element, text }
 }
 
-// 串行处理：一轮回复一次模型调用，不并发
-async function drain(queue) {
-  if (inFlight) {
-    pending.push(...queue)
-    return
-  }
-  inFlight = true
-  try {
-    for (const item of queue) {
-      const source = String('' + item.text)
-      // 回复自带标记块（主模型在末尾输出的 ::hmw 指令行）优先：
-      // 直接拿它标注，不发第二次模型请求
-      const inband = parseMarkDirectives(source)
-      const cleaned = stripMarkDirectives(source)
-      const resolved = resolveRenderedReply(cleaned)
-      const text = resolved ? resolved.text : cleaned
-      const element = resolved ? resolved.element : null
-      if (inband.length) {
-        await applyInband(inband, text, item.sessionId, element)
-      } else {
-        await analyzeReply(text, item.sessionId, element)
-      }
-    }
-  } finally {
-    inFlight = false
-    if (pending.length && !debounceTimer) {
-      debounceTimer = later(() => {
-        debounceTimer = 0
-        const next = pending.splice(0, pending.length)
-        void drain(next)
-      }, ANALYZE_DEBOUNCE_MS)
-    }
-  }
-}
-
-// 手动重扫：当前页面上的回复重新走一遍（命中标记表就不花 token）
+// 手动重扫：当前页面上的回复重新走一遍（只走标记块与标记表，不发请求）
 function rescan() {
   analyses.clear()
   const elements = assistantElements()
@@ -2727,7 +2327,6 @@ function ensureFadeLoop() {
 function SettingsPage() {
   const t = usePluginI18n(ID)
   const [enabled, setEnabled] = useState(settings.enabled)
-  const [tier, setTier] = useState(settings.tier)
   const [ignored, setIgnored] = useState(() => [...ignoredTerms])
 
   const update = patch => {
@@ -2751,22 +2350,6 @@ function SettingsPage() {
             hoverState.entries = []
           }
         }
-      }),
-      jsxs('div', {
-        key: 'tier',
-        className: 'hg-settings-row',
-        children: [
-          jsx('div', { className: 'hg-settings-title', children: t('tierLabel') }),
-          jsx('div', { className: 'hg-settings-hint', children: t('tierHint') }),
-          jsx(SegmentedControl, {
-            value: tier,
-            onChange: value => {
-              setTier(value)
-              update({ tier: value })
-            },
-            options: TIER_IDS.map(id => ({ id, label: t(TIERS[id].labelKey) }))
-          })
-        ]
       }),
       jsxs('div', {
         key: 'marks',
@@ -2848,9 +2431,11 @@ const plugin = {
     // 先搬旧 ID 的数据，再读设置和忽略词，否则旧值会被默认值盖掉
     migrateLegacyStorage()
     const stored = storage.get('settings', null)
-    settings = { ...SETTINGS_DEFAULT, ...(stored && typeof stored === 'object' ? stored : {}) }
-    if (!TIERS[settings.tier]) settings.tier = SETTINGS_DEFAULT.tier
-    if (!TASK_SLOTS.includes(settings.taskSlot)) settings.taskSlot = SETTINGS_DEFAULT.taskSlot
+    // 只认 enabled 一项：旧版本存过 tier / taskSlot，整份重建顺便清掉
+    settings = { enabled: !(stored && typeof stored === 'object' && stored.enabled === false) }
+    if (stored && typeof stored === 'object' && (stored.tier !== undefined || stored.taskSlot !== undefined)) {
+      storage.set('settings', settings)
+    }
     const storedIgnored = storage.get('ignoredTerms', null)
     ignoredTerms = Array.isArray(storedIgnored) ? storedIgnored.filter(item => typeof item === 'string' && item.trim()) : []
     // 解释缓存机制已下线：清掉旧版本攒下的缓存数据
@@ -2860,7 +2445,7 @@ const plugin = {
 
     // 装载心跳：写在插件自己的存储里，方便核对「这份代码真的被桌面端加载过」
     storage.set('heartbeat', { at: Date.now(), version: PLUGIN_VERSION })
-    diag('register', { version: PLUGIN_VERSION, tier: settings.tier })
+    diag('register', { version: PLUGIN_VERSION })
 
     // 认领 ::hmw 标记指令：主模型在回复末尾输出的指令行渲染成空组件，
     // 标记关系不进正文显示；插件从 message.complete 的原始文本里解析
@@ -2875,7 +2460,7 @@ const plugin = {
         }
       })
     } catch (err) {
-      // 旧 SDK 没有指令区：回退成纯辅助分析，功能不崩
+      // 旧 SDK 没有指令区：::hmw 行不会被藏起来，功能不崩
     }
 
     // 事件订阅走 ctx.onEvent：插件停用或卸载时自动断开
@@ -2981,8 +2566,6 @@ const plugin = {
       popover.hideTimer = 0
       cancelTimer(domTimer)
       domTimer = 0
-      cancelTimer(debounceTimer)
-      debounceTimer = 0
       cancelTimer(reanchorRetryTimer)
       reanchorRetryTimer = 0
       cancelTimer(pollTimer)
@@ -2991,7 +2574,6 @@ const plugin = {
       overlayRaf = 0
       cancelTimer(fadeRaf)
       fadeRaf = 0
-      pending.length = 0
       fadeSlots.clear()
       fadingTerms.clear()
       settledTerms.clear()
@@ -3013,26 +2595,19 @@ const plugin = {
 
 // 测试用内部件（不导出到运行时契约：测试 harness 用 replace 取出）
 const internals = {
-  TIERS,
-  TIER_IDS,
   markdownRoot,
   ignoreTerm,
   unignoreTerm,
   isIgnored,
-  TASK_SLOTS,
   isUsableTerm,
   rangeMatchesText,
-  localCandidates,
-  parseModelJson,
   coerceQuestions,
-  buildUserInput,
   fillComposer,
   analyzeReply,
   parseMarkDirectives,
   maskMarkDirectives,
   stripMarkDirectives,
   detectNewReplies,
-  modelInstructions,
   isOwnNode,
   locateAssistantElement,
   applyAnalysis,

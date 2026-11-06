@@ -27,7 +27,7 @@
 一条回复里没有值得怀疑的词，就一个标记都不出现，这是正常结果。
 
 > [!NOTE]
-> 插件要读会话区里已经写完的助手回复，才能把标记落在对的词上；辅助分析的请求还会带上最后一条用户提问当上下文。回复自带标记指令时不额外花模型请求；没带的话走一次批量辅助分析，接口是 Hermes 自己的 `llm.oneshot`。不碰第三方服务，不做遥测，不读文件，不碰凭据。
+> 插件要读会话区里已经写完的助手回复，才能把标记落在对的词上。它自己不发模型请求：标记来自回复自带的 `::hmw` 标记指令，没带指令的回复就没有标记。不碰第三方服务，不做遥测，不读文件，不碰凭据。
 
 <p align="center">
 <img src="assets/chat-marks.png" alt="回复里疑似生造的词画红色波浪线，值得商榷的词画中性点线" width="49%"><img src="assets/chat-popover.png" alt="悬停标记词弹出的解释窗，带解释与可追问的问题" width="49%">
@@ -45,14 +45,14 @@ hermes plugins install hey-yx/hermes-mark-words
 
 验证：让自己发一条带自造说法的回复，例如「队列在两个部署帧之间碰到 zeroframe」。回复写完一秒内，那个词下面会出现细红波浪线；鼠标移上去会弹出解释。
 
-不用目录、直接从仓库装：
+不用插件目录、直接从仓库装：
 
 ```bash
-mkdir -p ~/.hermes/desktop-plugins/hermes-mark-words
-cp desktop/plugin.js plugin.yaml ~/.hermes/desktop-plugins/hermes-mark-words/
+mkdir -p ~/.hermes/plugins/hermes-mark-words
+cp -r __init__.py plugin.yaml desktop skills ~/.hermes/plugins/hermes-mark-words/
 ```
 
-桌面端会自己发现这个目录。文件监听没触发时，用 `⌘K` → 「重新加载桌面插件」强制加载。
+桌面端那一半（`desktop/plugin.js`）由 app 复制进 `~/.hermes/desktop-plugins/` 加载，技能那一半从 `skills/` 注册。文件监听没触发时，用 `⌘K` → 「重新加载桌面插件」强制加载。
 
 ## 标什么
 
@@ -66,19 +66,9 @@ cp desktop/plugin.js plugin.yaml ~/.hermes/desktop-plugins/hermes-mark-words/
 
 ## 标记怎么来
 
-两条路，第一条不额外花请求。
+回复末尾带 `::hmw{term="…" kind="…" explain="…"}` 这样的指令行时，插件从成品文本里读出来，指令行不进正文显示，词当场标上。就这一条路：插件自己不发模型请求，标一条回复不花钱，没带指令的回复就没有标记。
 
-**回复自带标记指令。** 回复末尾带 `::hmw{term="…" kind="…" explain="…"}` 这样的指令行时，插件从成品文本里读出来，指令行不进正文显示，词当场标上，不再发第二次请求。[`reply-word-marks`](skills/reply-word-marks/SKILL.md) 技能让模型走的就是这条路（整个文件夹复制进 `~/.hermes/skills/` 即可安装）。
-
-**一次批量辅助分析。** 没带指令的回复走一次 `llm.oneshot` 请求。不按流式片段逐段调，同一条回复也不会问第二遍。
-
-| 档位 | 扫什么 | 送给模型什么 | 词数上限 | 每词追问上限 |
-| --- | --- | --- | --- | --- |
-| 宽松 | 只查高置信候选 | 候选词和它的上下文片段，外加最后一条用户提问 | 3 | 1 |
-| 中等 | 整段回复 | 回复正文，外加最后一条用户提问 | 5 | 2 |
-| 详细 | 整段回复 | 回复正文，外加最后一条用户提问 | 10 | 2 |
-
-三档都不送更早的对话；每档都附带最后一条用户提问，只是用来判断哪些词对这位用户生疏。档位越深越费 token，这是三档之间唯一的区别。
+[`reply-word-marks`](skills/reply-word-marks/SKILL.md) 技能就是让回复带上这些标记的约定，它随插件包一起交付。装好插件包就自动注册成 `hermes-mark-words:reply-word-marks`，并往新会话的提示词里注入一段精简约定，不用再单独装技能。
 
 ## 悬停
 
@@ -92,12 +82,12 @@ cp desktop/plugin.js plugin.yaml ~/.hermes/desktop-plugins/hermes-mark-words/
 
 ## 设置
 
-「设置 → 插件 → 标词助手」里有开关、扫描深度、两种标记状态的图例，以及已忽略词的列表。`⌘K` 里有「标词助手：重新扫描上一条回复」，专门处理已经显示在屏幕上的那条。
+「设置 → 插件 → 标词助手」里有开关、两种标记状态的图例，以及已忽略词的列表。`⌘K` 里有「标词助手：重新扫描上一条回复」，专门处理已经显示在屏幕上的那条。
 
 ## 隐私与网络
 
-- **网络**：只有没带标记指令的回复会发一次辅助模型请求，走 Hermes 自己的 `llm.oneshot` 和你配置的辅助模型。别的东西都不出本机。
-- **读取**：会话区里助手回复的文字（标记落在这些文字上）和最后一条用户提问（只作为辅助请求的上下文）。
+- **网络**：没有。插件自己不发任何模型请求。
+- **读取**：会话区里助手回复的文字（标记落在这些文字上）。
 - **写入**：标记、忽略词和设置存在插件自己的存储里。不写文件，不建数据库，不碰凭据。
 - **不做遥测**，也不自带更新器。更新只通过插件仓库或插件目录发布。
 
@@ -110,13 +100,13 @@ Hermes Agent 0.22.0 及以上，需要桌面端。插件就是一个运行时 ES
 ## 开发
 
 ```bash
-node --test tests/plugin.test.mjs   # 95 条离线测试
+node --test tests/plugin.test.mjs   # 83 条离线测试
 hermes plugins validate .           # 清单、能力与桌面端接口面检查
 ```
 
 测试把同一份运行时模块加载到替身插件 SDK 和替身 DOM 上跑，不需要装 Hermes。覆盖率没有做插桩：模块是测试时求值加载的，不是 import 进来的，所以这里放覆盖率徽章只会是一个空数字。
 
-[b-tests]: https://img.shields.io/badge/tests-95%20passing-brightgreen?style=flat-square
+[b-tests]: https://img.shields.io/badge/tests-83%20passing-brightgreen?style=flat-square
 [b-hermes]: https://img.shields.io/badge/Hermes%20Desktop-%3E%3D0.22.0-5b5bd6?style=flat-square
 [b-deps]: https://img.shields.io/badge/dependencies-none-3c873a?style=flat-square
 [b-license]: https://img.shields.io/badge/license-MIT-blue?style=flat-square

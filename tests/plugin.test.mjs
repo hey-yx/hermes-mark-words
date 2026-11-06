@@ -303,29 +303,6 @@ async function loadPlugin({ locale = 'en', tier = 'balanced', replyText = '', ta
 
 const REPLY = '门诊慢特病按病种，多数 70%。量子纠缠退税需要先自付 20%，剩下的 80% 再乘医院比例。'
 
-test('balanced and detailed inspect the end of a long reply', async () => {
-  const text = '普通背景介绍。'.repeat(1400) + '门诊慢特病和量子纠缠退税需要解释。';
-  for (const tier of ['balanced', 'detailed']) {
-    const app = await loadPlugin({ tier, replyText: text });
-    assert.ok(app.internals.buildUserInput(text, tier, null).includes('量子纠缠退税'));
-    await app.internals.analyzeReply(text, 'runtime-1', app.assistantEl);
-    const request = app.requests.find(item => item.method === 'llm.oneshot');
-    assert.ok(request.params.input.includes('量子纠缠退税'), `${tier} must send the tail`);
-    assert.ok([...app.highlights.values()].some(item => item.ranges.length));
-    app.dispose();
-  }
-});
-
-test('explanations follow the app language, not the reply language', async () => {
-  for (const [locale, language] of [['en', 'English'], ['zh', '中文']]) {
-    const app = await loadPlugin({ locale, replyText: REPLY });
-    await app.internals.analyzeReply(REPLY, 'runtime-1', app.assistantEl);
-    const request = app.requests.find(item => item.method === 'llm.oneshot');
-    assert.ok(request.params.instructions.includes(`Explanation language: ${language}`));
-    app.dispose();
-  }
-});
-
 test('locale change updates static labels', async () => {
   const app = await loadPlugin({ locale: 'en', replyText: REPLY });
   assert.equal(app.settingsPages.at(-1).title, 'Mark Words');
@@ -346,53 +323,46 @@ test('locale bundles cover en and zh with identical key sets', async () => {
   }
 })
 
-test('tier labels are the three levels the user asked for', async () => {
-  const { internals } = await loadPlugin()
-  assert.deepEqual(internals.TIER_IDS, ['light', 'balanced', 'detailed'])
-  assert.equal(internals.TIERS.light.scan, 'local')
-  assert.equal(internals.TIERS.balanced.scan, 'full')
-  assert.equal(internals.TIERS.detailed.scan, 'full')
-  assert.ok(internals.TIERS.detailed.maxTerms > internals.TIERS.balanced.maxTerms)
-  assert.ok(internals.TIERS.detailed.questions >= internals.TIERS.balanced.questions)
+test('设置页不再有扫描深度行', async () => {
+  const app = await loadPlugin({ locale: 'zh' })
+  const nodes = treeNodes(app.settingsPages[0].render())
+  const text = nodes.map(node => String((node.props && node.props.children) || '')).join(' ')
+  assert.equal(text.includes('扫描深度'), false, '扫描深度行要收掉')
+  assert.equal(text.includes('宽松'), false, '三档选择器要收掉')
+  assert.equal(text.includes('中等'), false)
+  app.dispose()
 })
 
-test('model JSON parsing survives fences, prose and junk', async () => {
-  const { internals } = await loadPlugin()
-  const fenced = internals.parseModelJson('```json\n{"terms":[{"term":"A"}]}\n```')
-  assert.equal(fenced.length, 1)
-  assert.equal(fenced[0].term, 'A')
-  const prose = internals.parseModelJson('好的，结果如下：{"terms":[{"term":"B","kind":"term"}]} 以上。')
-  assert.equal(prose.length, 1)
-  assert.equal(prose[0].term, 'B')
-  assert.deepEqual(internals.parseModelJson('完全不是 JSON'), [])
-  assert.deepEqual(internals.parseModelJson(''), [])
-  assert.deepEqual(internals.parseModelJson('{"terms":[{"kind":"term"}]}'), [])
+test('旧设置里的档位与任务槽装载时清掉', async () => {
+  const stored = new Map()
+  stored.set('settings', { enabled: true, tier: 'detailed', taskSlot: 'title_generation' })
+  await loadPlugin({ stored })
+  assert.deepEqual(stored.get('settings'), { enabled: true }, '旧配置里的 tier / taskSlot 必须清掉')
 })
 
-test('local candidate extraction finds acronyms, identifiers and Chinese jargon', async () => {
-  const { internals } = await loadPlugin()
-  const found = internals.localCandidates('用 API 和 snake_case_id 调用 authToken 服务，门诊慢特病按病种报销。')
-  assert.ok(found.includes('API'))
-  assert.ok(found.includes('snake_case_id'))
-  assert.ok(found.includes('authToken'))
-  assert.ok(found.some(term => term.includes('慢特病')))
-})
-
-test('自动把 p90 这类性能指标当成候选，且不碰版本号、URL 和普通数字', async () => {
-  const { internals } = await loadPlugin()
-  const text = '首字中位 1.59s，P90 2.30s，p90 与 p95 都降了，TTFB 快了一点，QPS 上去了。'
-  const found = internals.localCandidates(text)
-  for (const term of ['P90', 'p90', 'p95', '首字中位', 'TTFB', 'QPS']) {
-    assert.ok(found.includes(term), `应当抽到 ${term}，实际 ${JSON.stringify(found)}`)
+test('随包交付的 skill 与常驻契约写清了挑词口径', async () => {
+  const skill = await readFile(path.join(here, '..', 'skills', 'reply-word-marks', 'SKILL.md'), 'utf8')
+  // 只挑有疑点的词：基础词与标准术语不标
+  assert.ok(skill.includes('存疑'), 'skill 必须点名只标存疑的词')
+  for (const token of ['浏览器', '下载', '标准术语']) {
+    assert.ok(skill.includes(token), `skill 里缺少 ${token}`)
   }
-  // 轻档只留 3 个候选：指标必须排在最前面，不被别的词挤掉
-  assert.deepEqual(found.slice(0, 3).sort(), ['P90', 'p90', 'p95'].sort())
+  assert.ok(!skill.includes('见到就标'), '旧口径的性能词必标规则必须删掉')
+  // 不限语言
+  assert.ok(skill.includes('不限语言'), 'skill 必须说明不限语言')
+  // 解释要就着上下文、说不清要明说
+  assert.ok(skill.includes('是干嘛用的'), '解释要回答它在这段话里是干嘛的')
+  assert.ok(skill.includes('不写百科式定义'), '不许百科式定义')
+  assert.ok(skill.includes('明说'), '说不清要明说，不许编')
+  // 追问 0 到 2 条、不凑数
+  assert.ok(skill.includes('0 到 2 条'), '追问 0 到 2 条')
+  assert.ok(skill.includes('没有能落地的追问就别写'), '没有合适的就不给')
 
-  const noisy = '版本 v1.2.3，旧值 3.0s，30 次样本，见 https://ex.com/p90/docs，第 3 章，16GB 内存，HTTP/2。'
-  const leaked = internals.localCandidates(noisy)
-  for (const junk of ['ex.com/p90', 'v1.2.3', '3.0s', '30', '16GB', 'HTTP/2']) {
-    assert.ok(!leaked.includes(junk), `不该把 ${junk} 当候选，实际 ${JSON.stringify(leaked)}`)
-  }
+  // 常驻契约同样要覆盖格式与不凑数
+  const contract = await readFile(path.join(here, '..', '__init__.py'), 'utf8')
+  assert.ok(contract.includes('::hmw{'), '契约里必须带格式样例')
+  assert.ok(contract.includes('绝不凑数'), '契约里必须写明不凑数')
+  assert.ok(contract.includes('register_skill'), 'skill 必须随包注册')
 })
 
 test('指标词与基础词过不了闸门，URL 片段和版本号也过不去', async () => {
@@ -424,95 +394,29 @@ test('两字纯汉字词只有存疑档能标，术语档不放行', async () =>
   assert.equal(internals.isUsableTerm('零空帧', text + '零空帧', 'term'), true)
 })
 
-test('挑词口径只标有疑点：基础词、标准术语与任何语言都写进指令', async () => {
-  const { internals } = await loadPlugin()
-  const instructions = internals.modelInstructions()
-  // 选词标准：只挑存疑的词
-  assert.ok(instructions.includes('存疑'), '指令必须点名只标存疑的词')
-  // 明确点名基础词与标准术语不标
-  for (const token of ['浏览器', '下载', '标准术语']) {
-    assert.ok(instructions.includes(token), `指令里缺少 ${token}`)
-  }
-  // 不再硬性要求把性能指标全标出来（那是旧口径，用户已否）
-  assert.ok(!instructions.includes('见到就标'), '旧口径的性能词必标规则必须删掉')
-  // 不限语言
-  assert.ok(instructions.includes('哪种语言'), '指令必须说明不限语言')
-  assert.ok(instructions.includes('日文'), '指令必须点名非中英文')
-})
-
-
-test('light tier sends candidate snippets only, balanced sends the reply body', async () => {
-  const { internals } = await loadPlugin()
-  const body = '甲'.repeat(9000)
-  const light = internals.buildUserInput(body, 'light', ['慢特病'])
-  assert.ok(light.includes('慢特病'))
-  assert.ok(!light.includes('甲'.repeat(100)))
-
-  // 中等与详细档覆盖完整回复，不再截断开头若干字
-  const balanced = internals.buildUserInput(body, 'balanced', [])
-  assert.ok(balanced.includes('甲'.repeat(100)))
-  assert.ok(balanced.includes('甲'.repeat(9000)))
-
-  const detailed = internals.buildUserInput(body, 'detailed', [])
-  assert.ok(detailed.includes('甲'.repeat(9000)))
-})
-
-test('one reply costs exactly one llm call, and a repeat costs none', async () => {
+test('没带标记块的回复零请求、零标注', async () => {
   const app = await loadPlugin({ replyText: REPLY })
   app.fire('message.complete', { text: REPLY })
-  await sleep(450)
-  const oneshots = app.requests.filter(req => req.method === 'llm.oneshot')
-  assert.equal(oneshots.length, 1)
-  assert.equal(oneshots[0].params.task, 'title_generation')
-  assert.ok(oneshots[0].params.input.includes('门诊慢特病'))
-
-  app.fire('message.complete', { text: REPLY })
-  await sleep(450)
-  assert.equal(app.requests.filter(req => req.method === 'llm.oneshot').length, 1)
-})
-
-test('模型失败不能把回复记成「没有够格的词」，下次触发照样标得上', async () => {
-  let calls = 0
-  const app = await loadPlugin({
-    replyText: REPLY,
-    oneshot: async () => {
-      calls += 1
-      if (calls <= 2) throw new Error('llm.oneshot timed out')
-      return {
-        text: JSON.stringify({
-          terms: [
-            { term: '量子纠缠退税', kind: 'fabricated', explain: '疑似生造或含义不明', note: '', questions: [] }
-          ]
-        })
-      }
-    }
-  })
-  app.fire('message.complete', { text: REPLY })
-  await sleep(1400)
-  assert.equal(calls, 2, '第一次失败后当场重试一次')
-  assert.ok(![...app.highlights.values()].some(item => item.ranges && item.ranges.length), '两次都失败时不标')
-
-  app.fire('message.complete', { text: REPLY })
-  await sleep(1400)
-  assert.equal(calls, 3, '失败不入缓存，再次触发重新分析')
-  assert.ok([...app.highlights.values()].some(item => item.ranges && item.ranges.length), '成功后要标上')
+  await sleep(700)
+  assert.equal(app.requests.length, 0, '没标记块的回复一个请求都不发')
+  assert.equal([...app.highlights.values()].reduce((n, item) => n + item.ranges.length, 0), 0,
+    '没标记块就是没有标记，不补不猜')
   app.dispose()
 })
 
-test('light tier with no candidate spends nothing', async () => {
-  const app = await loadPlugin({ replyText: '这是一段没有任何专有名词的普通中文回复，用来验证零调用路径。' })
-  app.internals.TIERS.light
-  const original = app.internals.TIERS.light.maxTerms
-  assert.ok(original > 0)
-  app.fire('message.complete', { text: '这是一段没有任何专有名词的普通中文回复，用来验证零调用路径。' })
+test('同一条回复不管来多少次都是零请求', async () => {
+  const app = await loadPlugin({ replyText: REPLY })
+  app.fire('message.complete', { text: REPLY })
   await sleep(450)
-  // 宽松档也只对本地候选问模型；这段话没有候选，因此零调用
-  assert.equal(app.requests.filter(req => req.method === 'llm.oneshot').length, 0)
+  app.fire('message.complete', { text: INBAND_RAW })
+  await sleep(450)
+  assert.equal(app.requests.length, 0)
+  app.dispose()
 })
 
 test('terms get a highlight, suspected words get the wavy one', async () => {
   const app = await loadPlugin({ replyText: REPLY })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
   const term = app.highlights.get('hg-term')
   const suspect = app.highlights.get('hg-suspect')
@@ -524,7 +428,7 @@ test('terms get a highlight, suspected words get the wavy one', async () => {
 
 test('the popover icon fills the composer and never sends', async () => {
   const app = await loadPlugin({ replyText: REPLY })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
 
   const handlers = app.doc.handlers.mousemove || []
@@ -541,7 +445,7 @@ test('the popover icon fills the composer and never sends', async () => {
   await sleep(50)
 
   assert.equal(app.inserted.length, 1)
-  assert.ok(app.inserted[0].text.includes('慢特病'))
+  assert.ok(app.inserted[0].text.includes('怎么认定'))
   assert.equal(app.inserted[0].options.mode, 'block')
   assert.equal(app.submitted.length, 0, 'the plugin must never send by itself')
 })
@@ -566,32 +470,6 @@ test('coerceQuestions normalizes strings, escaped arrays and objects', async () 
   assert.deepEqual(coerceQuestions(undefined), [])
 })
 
-test('parseModelJson survives a broken payload and salvages the terms', async () => {
-  const app = await loadPlugin({ replyText: REPLY })
-  const { parseModelJson } = app.internals
-  // 模型把 questions 写成字符串数组的转义字符串
-  const escaped = JSON.stringify({
-    terms: [{ term: '普通门诊', kind: 'term', explain: '常规门诊', note: '', questions: '["普通门诊有起付线吗？","异地怎么算？"]' }]
-  })
-  const parsed = parseModelJson(escaped)
-  assert.equal(parsed.length, 1)
-  assert.equal(parsed[0].term, '普通门诊')
-  assert.deepEqual(parsed[0].questions, ['普通门诊有起付线吗？', '异地怎么算？'])
-
-  // 整体 JSON 坏掉：引号没闭合
-  const broken = '{"terms":[{"term":"门诊慢特病","kind":"term","explain":"慢特病备案","note":"按当地口径","questions":["怎么认定？"]},{"term":"量子纠缠退税","kind":"fabricated","explain":"疑似生造","note":"","questions":["有出处吗？"]}]}'
-  const salvaged = parseModelJson(broken.replace('"门诊慢特病","kind"', '"门诊慢特病","kind"'))
-  assert.ok(Array.isArray(salvaged))
-})
-
-test('parseModelJson accepts a bare array of terms', async () => {
-  const app = await loadPlugin({ replyText: REPLY })
-  const parsed = app.internals.parseModelJson('[{"term":"社区医院","kind":"term","questions":["能办备案吗？"]}]')
-  assert.equal(parsed.length, 1)
-  assert.equal(parsed[0].term, '社区医院')
-  assert.deepEqual(parsed[0].questions, ['能办备案吗？'])
-})
-
 test('isUsableTerm 只放原文里真出现、且不像代码片段的词', async () => {
   const app = await loadPlugin({ replyText: REPLY })
   const ok = app.internals.isUsableTerm
@@ -610,36 +488,30 @@ test('isUsableTerm 只放原文里真出现、且不像代码片段的词', asyn
   assert.equal(ok('门', REPLY), false)
 })
 
-test('DOM 兜底：页面上出现新的助手回复就分析一次，且与网关事件不重复', async () => {
+test('DOM 兜底：页面上出现新的助手回复零请求，没标记块就不标', async () => {
   const app = await loadPlugin({ replyText: '' })
   const reply = '门诊慢特病按病种报销，异地就医需要先备案，量子纠缠退税这类说法没有依据，建议向医保经办机构确认。'
   app.mdEl.textContent = reply
-  // 第一次看到：文字刚出现，还在流式输出中，不该发请求
+  // 文字刚出现、还在流式输出中：不动
   app.internals.detectNewReplies()
   await sleep(300)
-  assert.equal(app.requests.filter(req => req.method === 'llm.oneshot').length, 0)
-
-  // 文字不再变化、安静够久之后才分析
+  assert.equal(app.requests.length, 0)
+  // 安静够久：没标记块就是没标记，一个请求都不发
   await sleep(1300)
   app.internals.detectNewReplies()
   await sleep(700)
-  const oneshots = app.requests.filter(req => req.method === 'llm.oneshot')
-  assert.equal(oneshots.length, 1)
-
-  // 再来一次同样的回复：不重复花钱
-  app.internals.detectNewReplies()
-  await sleep(300)
-  assert.equal(app.requests.filter(req => req.method === 'llm.oneshot').length, 1)
-
-  // 网关事件补一次同一条回复：也不重复花钱
+  assert.equal(app.requests.length, 0, 'DOM 兜底也不发模型请求')
+  assert.equal([...app.highlights.values()].reduce((n, item) => n + item.ranges.length, 0), 0)
+  // 网关事件补一次同一条回复：同样零请求、零标注
   app.fire('message.complete', { text: reply })
   await sleep(400)
-  assert.equal(app.requests.filter(req => req.method === 'llm.oneshot').length, 1)
+  assert.equal(app.requests.length, 0)
+  app.dispose()
 })
 
 test('疑似生造的词交给浏览器原生高亮画波浪线，插件不再自绘', async () => {
   const app = await loadPlugin({ replyText: REPLY })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
 
   // 波浪线由 ::highlight(hg-suspect) 画：浏览器自己定位，永远贴着文字
@@ -656,7 +528,7 @@ test('疑似生造的词交给浏览器原生高亮画波浪线，插件不再�
 
 test('标记颜色只来自 app 主题变量，插件不写死颜色', async () => {
   const app = await loadPlugin({ replyText: REPLY })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
   const style = app.doc.getElementById('hermes-mark-words-style')
   assert.ok(style, 'style element missing')
@@ -676,7 +548,7 @@ test('标记颜色只来自 app 主题变量，插件不写死颜色', async () 
 test('popover 在显示状态下量尺寸，位置不会盖住术语本身', async () => {
   const rangeRect = { top: 100, left: 40, right: 200, bottom: 120, width: 160, height: 20 }
   const app = await loadPlugin({ replyText: REPLY, rangeRect })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
 
   const handlers = app.doc.handlers.mousemove || []
@@ -694,7 +566,7 @@ test('popover 在显示状态下量尺寸，位置不会盖住术语本身', asy
 
 test('插件自己写的样式层不会触发观察器自激（页面不抖）', async () => {
   const app = await loadPlugin({ replyText: REPLY })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
   const style = app.created.find(el => el.id === 'hermes-mark-words-style')
   assert.ok(style, 'style element not created')
@@ -704,7 +576,7 @@ test('插件自己写的样式层不会触发观察器自激（页面不抖）',
 
 test('同一条回复重复分析时不会重画（高亮不闪）', async () => {
   const app = await loadPlugin({ replyText: REPLY })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
 
   const before = app.highlights.get('hg-term')
@@ -721,7 +593,7 @@ test('同一条回复重复分析时不会重画（高亮不闪）', async () =>
 
 test('字形位置变了但字没变时不重登记高亮（防闪）', async () => {
   const app = await loadPlugin({ replyText: REPLY })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
 
   const before = app.highlights.get('hg-suspect')
@@ -768,7 +640,7 @@ test('文本节点被 React 原地改写后，指向别处的 Range 会被拒绝
 
 test('React 原地改写文本节点后，高亮重新指向正确的词', async () => {
   const app = await loadPlugin({ replyText: REPLY })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
   assert.ok(app.highlights.get('hg-term'), 'highlight registered')
   // 模拟 React 原地改写：文本变了，签名也变了，旧 Range 会漂
@@ -781,7 +653,7 @@ test('React 原地改写文本节点后，高亮重新指向正确的词', async
 
 test('React 换掉文本节点后，观察器回调当场就把标记接回去（不留空白帧）', async () => {
   const app = await loadPlugin({ replyText: REPLY })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
   const before = app.highlights.get('hg-term')
   assert.ok(before && before.ranges.length > 0, 'highlight registered')
@@ -800,7 +672,7 @@ test('React 换掉文本节点后，观察器回调当场就把标记接回去�
 
 test('回复里词消失后，旧标记会被撤掉，不会留在原地', async () => {
   const app = await loadPlugin({ replyText: REPLY })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
   assert.ok(app.highlights.get('hg-term').ranges.length > 0)
   // 整段换成不含术语的内容
@@ -833,7 +705,7 @@ test('定位回复时优先用尾部锚点，不会标到别的消息上', async
 
 test('原生高亮可用时，黄色底交给浏览器，不用插件自己贴块', async () => {
   const app = await loadPlugin({ replyText: REPLY })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
   assert.equal(app.internals.supportsNativeHighlight(), true)
   const hlLayer = app.created.find(el => el.id === 'hermes-mark-words-hl')
@@ -860,7 +732,7 @@ test('思考块不标：markdownRoot 只认正文，跳过 data-conversation-sca
 
 test('忽略功能：点忽略后词立刻撤掉，解除后恢复', async () => {
   const app = await loadPlugin({ replyText: REPLY })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
   assert.ok(app.highlights.get('hg-term'), 'marked before ignore')
 
@@ -886,7 +758,7 @@ test('文件路径不再被解释', async () => {
 test('鼠标移进 popover 后不再被 mousemove 关掉', async () => {
   const rangeRect = { top: 100, left: 40, right: 200, bottom: 120, width: 160, height: 20 }
   const app = await loadPlugin({ replyText: REPLY, rangeRect })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
   const handlers = app.doc.handlers.mousemove || []
   handlers[0]({ clientX: 100, clientY: 110 })
@@ -908,7 +780,7 @@ test('鼠标移进 popover 后不再被 mousemove 关掉', async () => {
 test('鼠标持续移动时 popover 也在固定时间内消失，不被推迟', async () => {
   const rangeRect = { top: 100, left: 40, right: 200, bottom: 120, width: 160, height: 20 }
   const app = await loadPlugin({ replyText: REPLY, rangeRect })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
   const handlers = app.doc.handlers.mousemove || []
   handlers[0]({ clientX: 100, clientY: 110 })
@@ -926,7 +798,7 @@ test('鼠标持续移动时 popover 也在固定时间内消失，不被推迟',
 test('鼠标移出窗口时 popover 直接收掉，不留在屏幕上', async () => {
   const rangeRect = { top: 100, left: 40, right: 200, bottom: 120, width: 160, height: 20 }
   const app = await loadPlugin({ replyText: REPLY, rangeRect })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
   const handlers = app.doc.handlers.mousemove || []
   handlers[0]({ clientX: 100, clientY: 110 })
@@ -951,7 +823,7 @@ test('被中断或出错的回复不标注', async () => {
 
 test('滚动后命中坐标必须重算：不能命中滚动前的旧位置', async () => {
   const app = await loadPlugin({ replyText: REPLY })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
   // 词在屏幕上挪了位置（滚动导致）
   app.rectState.rect = { top: 500, left: 300, right: 420, bottom: 520, width: 120, height: 20 }
@@ -977,7 +849,7 @@ test('滚动后命中坐标必须重算：不能命中滚动前的旧位置', as
 test('popover 出现在鼠标下方时不会被自己的 mousemove 关掉', async () => {
   const rangeRect = { top: 100, left: 40, right: 200, bottom: 120, width: 160, height: 20 }
   const app = await loadPlugin({ replyText: REPLY, rangeRect })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
   const handlers = app.doc.handlers.mousemove || []
   handlers[0]({ clientX: 100, clientY: 110, target: app.doc.body })
@@ -1093,7 +965,8 @@ test('历史插件 ID 的忽略词和设置搬进新 ID，旧键被清掉', asyn
   ])
   const app = await loadPlugin({ stored, legacy })
   assert.deepEqual(stored.get('ignoredTerms'), ['旧词'])
-  assert.equal(stored.get('settings').tier, 'detailed')
+  // 旧配置里的 tier / taskSlot 一并清掉，只留 enabled
+  assert.deepEqual(stored.get('settings'), { enabled: true })
   assert.equal(legacy.size, 0, 'legacy keys must be removed after migration')
   assert.equal(app.internals.isIgnored('旧词'), true)
 })
@@ -1429,17 +1302,6 @@ test('设置页把标记状态标清楚：点线与波浪线各一行，带样�
   app.dispose()
 })
 
-test('旧宿主没有 i18n 时按系统语言挑中英文案', async () => {
-  const app = await loadPlugin({ i18nEnabled: false, replyText: REPLY })
-  // 没有系统语言信息时保持中文
-  assert.ok(app.internals.modelInstructions().includes('Explanation language: 中文'))
-  app.win.navigator = { language: 'zh-TW' }
-  assert.ok(app.internals.modelInstructions().includes('Explanation language: 中文'))
-  app.win.navigator = { language: 'en-US' }
-  assert.ok(app.internals.modelInstructions().includes('Explanation language: English'))
-  app.dispose()
-})
-
 // ─── 标记偏好已下线（v0.21.0）：解析与指令不再做主题归类 ────────────────
 
 test('旧标记块里多余的主题属性被忽略，解析不受影响', async () => {
@@ -1447,14 +1309,6 @@ test('旧标记块里多余的主题属性被忽略，解析不受影响', async
   const entries = app.internals.parseMarkDirectives('正文。\n::hmw{term="熔断降级", kind="term", theme="tech", explain="微服务容错手段"}\n::hmw{term="门诊慢特病", kind="term", explain="医保认定"}')
   assert.deepEqual(entries.map(item => item.term), ['熔断降级', '门诊慢特病'])
   assert.equal(entries.some(item => 'theme' in item), false, '主题归类已下线，不再解析 theme')
-  app.dispose()
-})
-
-test('辅助模型指令不再做主题归类', async () => {
-  const app = await loadPlugin({ replyText: REPLY })
-  const instructions = app.internals.modelInstructions()
-  assert.equal(instructions.includes('theme'), false, '指令里不再要求 theme 归类')
-  assert.equal(instructions.includes('主题'), false, '不再有主题过滤口径')
   app.dispose()
 })
 
@@ -1486,15 +1340,6 @@ test('解释说不清时不装懂：空白或一句带过就显示诚实提示',
   app.dispose()
 })
 
-test('提示词要求按上下文解释、说不清要明说', async () => {
-  const app = await loadPlugin()
-  const instructions = app.internals.modelInstructions()
-  assert.ok(instructions.includes('是干嘛用的'), '解释要回答它在这段话里是干嘛的')
-  assert.ok(instructions.includes('不要写百科式定义'), '不许百科式定义')
-  assert.ok(instructions.includes('明说'), '说不清要明说，不许编')
-  app.dispose()
-})
-
 // ─── v0.20.0：配置精简 / 暗色可读 ─────────────────────────────────────
 
 test('设置页不再有辅助模型槽配置', async () => {
@@ -1508,7 +1353,7 @@ test('设置页不再有辅助模型槽配置', async () => {
 
 test('淡入系数写在根节点上，卸载后清掉', async () => {
   const app = await loadPlugin({ replyText: REPLY })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(800)
   assert.notEqual(app.doc.documentElement.style.getPropertyValue('--hg-fade-0'), '', '淡入时应有系数')
   app.dispose()
@@ -1564,7 +1409,7 @@ test('旧解释缓存装载时清掉，标记恢复只靠标记表', async () =>
 test('sessions.changed 重挂后悬停还能弹解释（标记在、hover 不能死）', async () => {
   const rangeRect = { top: 100, left: 40, right: 200, bottom: 120, width: 160, height: 20 }
   const app = await loadPlugin({ replyText: REPLY, rangeRect })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
   const move = app.doc.handlers.mousemove[0]
   move({ clientX: 100, clientY: 110 })
@@ -1580,7 +1425,7 @@ test('sessions.changed 重挂后悬停还能弹解释（标记在、hover 不能
 
 test('文本节点被原地改写、Range 折叠后，高亮必须重新钉回词上', async () => {
   const app = await loadPlugin({ replyText: REPLY })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
   const before = app.highlights.get('hg-term')
   assert.ok(before && before.ranges.length > 0, 'term range not registered')
@@ -1603,17 +1448,6 @@ test('文本节点被原地改写、Range 折叠后，高亮必须重新钉回�
   app.dispose()
 })
 
-test('追问条数不固定：提示词与用户输入都允许 0 到 2 个、不凑数', async () => {
-  const { internals } = await loadPlugin()
-  const instructions = internals.modelInstructions()
-  assert.ok(instructions.includes('0 到 2 个'), '追问 0 到 2 个')
-  assert.ok(instructions.includes('没有合适的就不给'), '没有合适的就不给')
-  assert.ok(instructions.includes('[]'), '空数组是合法输出')
-  const input = internals.buildUserInput('门诊慢特病需要核实。', 'balanced', [])
-  assert.ok(input.includes('最多给 2 个追问'), '中等档最多 2 个')
-  assert.ok(input.includes('没有合适的就不给'), '允许不给')
-})
-
 // ─── v0.24.1：流式输出期间，正在看的弹层不再被滚动和新动态打掉 ──────────────
 
 function openOnTerm(app, x = 100, y = 110) {
@@ -1631,7 +1465,7 @@ function fireScroll(app) {
 test('指针还在词上时滚动：弹层跟着词的新位置走，不消失', async () => {
   const rangeRect = { top: 100, left: 40, right: 200, bottom: 120, width: 160, height: 20 }
   const app = await loadPlugin({ replyText: REPLY, rangeRect })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
   const popover = openOnTerm(app)
   assert.ok(popover && popover.style.display === 'block', '悬停要先弹出解释')
@@ -1647,7 +1481,7 @@ test('指针还在词上时滚动：弹层跟着词的新位置走，不消失',
 test('指针停在弹层上时滚动：弹层原地不动，也不被收掉', async () => {
   const rangeRect = { top: 100, left: 40, right: 200, bottom: 120, width: 160, height: 20 }
   const app = await loadPlugin({ replyText: REPLY, rangeRect })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
   const popover = openOnTerm(app)
   assert.ok(popover && popover.style.display === 'block', '悬停要先弹出解释')
@@ -1663,7 +1497,7 @@ test('指针停在弹层上时滚动：弹层原地不动，也不被收掉', as
 test('流式滚动把词带走时：弹层冻在原地，不收也不跟着跑', async () => {
   const rangeRect = { top: 100, left: 40, right: 200, bottom: 120, width: 160, height: 20 }
   const app = await loadPlugin({ replyText: REPLY, rangeRect })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
   const popover = openOnTerm(app)
   assert.ok(popover && popover.style.display === 'block', '悬停要先弹出解释')
@@ -1679,7 +1513,7 @@ test('流式滚动把词带走时：弹层冻在原地，不收也不跟着跑',
 test('sessions.changed（下一条回复开始输出）不再把正在看的弹层收掉', async () => {
   const rangeRect = { top: 100, left: 40, right: 200, bottom: 120, width: 160, height: 20 }
   const app = await loadPlugin({ replyText: REPLY, rangeRect })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
   const popover = openOnTerm(app)
   assert.ok(popover && popover.style.display === 'block', '悬停要先弹出解释')
@@ -1691,7 +1525,7 @@ test('sessions.changed（下一条回复开始输出）不再把正在看的弹�
 test('指针离开词以后，未命中照旧把弹层收掉', async () => {
   const rangeRect = { top: 100, left: 40, right: 200, bottom: 120, width: 160, height: 20 }
   const app = await loadPlugin({ replyText: REPLY, rangeRect })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
   const popover = openOnTerm(app)
   assert.ok(popover && popover.style.display === 'block', '悬停要先弹出解释')
@@ -1704,7 +1538,7 @@ test('指针离开词以后，未命中照旧把弹层收掉', async () => {
 test('词整段滚出视口后，弹层跟着收掉，不会贴在屏幕边上', async () => {
   const rangeRect = { top: 100, left: 40, right: 200, bottom: 120, width: 160, height: 20 }
   const app = await loadPlugin({ replyText: REPLY, rangeRect })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(700)
   const popover = openOnTerm(app)
   assert.ok(popover && popover.style.display === 'block', '悬停要先弹出解释')
@@ -1720,7 +1554,7 @@ test('词整段滚出视口后，弹层跟着收掉，不会贴在屏幕边上',
 
 test('停用插件：覆盖层、样式、高亮、根变量全部收回', async () => {
   const app = await loadPlugin({ replyText: REPLY })
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(800)
   assert.ok(app.highlights.size > 0, '标注应先挂上')
   assert.ok(app.doc.body.children.some(el => el.id === 'hermes-mark-words-hl'), '覆盖层节点应已建立')
@@ -1740,7 +1574,7 @@ test('停用插件：覆盖层、样式、高亮、根变量全部收回', async
 test('停用之后进来的回复不再被标注，也不再花模型请求', async () => {
   const app = await loadPlugin({ replyText: REPLY })
   app.dispose()
-  app.fire('message.complete', { text: REPLY })
+  app.fire('message.complete', { text: INBAND_RAW })
   await sleep(600)
   assert.equal(app.highlights.size, 0, '停用后不许再画标记')
   assert.equal(app.doc.body.children.some(el => el.id === 'hermes-mark-words-hl'), false)

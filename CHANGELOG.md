@@ -2,6 +2,22 @@
 
 Newest first. Versions are 0.x; the plugin is pre-1.0 on purpose.
 
+## v0.25.0
+
+- The auxiliary model path is gone. Mark relations come only from the
+  `::hmw` markers the main model appends to the reply itself, applied
+  locally with zero model calls. A reply without markers gets no marks:
+  the plugin never opens a request of its own, so it costs nothing and
+  never touches the conversation.
+- The `reply-word-marks` skill now ships inside the plugin package
+  (`skills/reply-word-marks/`, registered as
+  `hermes-mark-words:reply-word-marks`), and a compact marker contract
+  is injected into every new session prompt so replies reliably carry
+  the markers. No separate skill install is needed to deliver the whole
+  behavior.
+- Settings lost the scan-depth and task-slot rows; old stored values are
+  dropped on load.
+
 ## v0.24.4
 
 - Disclosure fix from catalog review: the auxiliary `llm.oneshot` request
