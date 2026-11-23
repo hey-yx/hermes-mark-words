@@ -22,7 +22,7 @@ English | [简体中文](README.zh-CN.md)
 
 </div>
 
-Every reply arrives with a few words that deserve a second look: a phrase that may not exist, a word whose meaning is unclear in this sentence, an existing term used in a way worth questioning. Mark Words underlines those words in place and explains them the moment you hover. Everyday words and settled technical terms stay clean.
+A reply often carries a word or two worth a second look: a phrase that may not exist, a word whose meaning is unclear in this sentence, an existing term used in a way worth questioning. Mark Words underlines those words in place and explains them the moment you hover. Everyday words and settled technical terms stay clean.
 
 A reply with nothing doubtful gets no marks at all, and that is the normal outcome.
 

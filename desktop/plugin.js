@@ -22,7 +22,7 @@ import { useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 const ID = 'hermes-mark-words'
-const PLUGIN_VERSION = '0.24.4'
+const PLUGIN_VERSION = '0.25.0'
 // 历史插件 ID。改 ID 会换存储键前缀，旧键里的忽略词、设置在这里各搬一次；缓存键搬过来也会被清掉。
 const LEGACY_IDS = ['hermes-term-helper', 'hermes-glossary']
 
